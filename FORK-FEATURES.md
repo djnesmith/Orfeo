@@ -26,3 +26,11 @@ ditto release/mac-arm64/Orfeo.app /Applications/Orfeo.app
 - Files: `scripts/check-hand-engine-version.mjs`, `src/utils/handAssignment.hash.json`
 - After a merge: upstream rewrites `handAssignment.hash.json` on each engine bump with a CRLF hash. Keep their `version`, then run `node scripts/check-hand-engine-version.mjs --update` to store the LF hash.
 - Check: `npm run check:hand-engine` exits 0.
+
+## 2. Closing the window quits on macOS
+
+`window-all-closed` calls `app.quit()` on every platform. Upstream kept the app running on macOS with no window and no way to reopen it, since nothing handles the Dock's `activate`.
+
+- Commits: the one that adds this entry (`git log -S "app.on('window-all-closed', () => app.quit())" --oneline`)
+- Files: `electron/main.ts`
+- Check: open Orfeo, click the red close button; the app leaves the Dock and `pgrep -f Orfeo.app` prints nothing.

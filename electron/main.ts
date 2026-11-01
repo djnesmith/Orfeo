@@ -1976,4 +1976,5 @@ app.whenReady().then(async () => {
     setTimeout(() => { autoUpdater.checkForUpdates().catch(() => {}) }, 5000)
   }
 })
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
+// Fork: quit on macOS too. Orfeo has one window, and nothing reopens it from the Dock
+app.on('window-all-closed', () => app.quit())
