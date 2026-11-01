@@ -10,15 +10,19 @@ Typecheck: `npm run typecheck`. Build a Release Mac app (Apple Silicon):
 
 ```sh
 npm ci
-npm run copyworklet
-npx electron-vite build
-npx electron-builder --mac dir --arm64 --publish never -c.mac.identity=null -c.mac.icon=null
+npm run build
+npx electron-builder --mac dir --arm64 --publish never -c.mac.identity=null
 codesign --force --deep -s - release/mac-arm64/Orfeo.app
 ditto release/mac-arm64/Orfeo.app /Applications/Orfeo.app
 ```
 
-`npm run build` and `npm run dist` fail on a Mac at `check:hand-engine`: `src/utils/handAssignment.hash.json` holds the hash of a Windows (CRLF) checkout, so an LF checkout never matches. The steps above skip that check. `package.json` points `mac.icon` at `public/icon.icns`, which upstream doesn't have, so the app gets the default Electron icon.
-
 ## Features
 
-None yet.
+## 1. Hand-engine check ignores line endings
+
+`scripts/check-hand-engine-version.mjs` turns CRLF into LF before hashing `src/utils/handAssignment.ts`. Upstream's stored hash came from a Windows (CRLF) checkout, so `npm run build` failed on every Mac/Linux (LF) checkout. `src/utils/handAssignment.hash.json` now holds the LF hash.
+
+- Commits: the one that adds this entry (`git log -S 'Line endings ignored' --oneline`)
+- Files: `scripts/check-hand-engine-version.mjs`, `src/utils/handAssignment.hash.json`
+- After a merge: upstream rewrites `handAssignment.hash.json` on each engine bump with a CRLF hash. Keep their `version`, then run `node scripts/check-hand-engine-version.mjs --update` to store the LF hash.
+- Check: `npm run check:hand-engine` exits 0.

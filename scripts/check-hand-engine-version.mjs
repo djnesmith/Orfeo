@@ -16,7 +16,8 @@ const META = join(__dirname, '../src/utils/handMetadata.ts')
 const HASH_FILE = join(__dirname, '../src/utils/handAssignment.hash.json')
 
 const content = readFileSync(SRC, 'utf8')
-const hash = createHash('sha256').update(content).digest('hex')
+// Line endings ignored: a Windows (CRLF) and a Mac/Linux (LF) checkout hash the same
+const hash = createHash('sha256').update(content.replace(/\r\n/g, '\n')).digest('hex')
 
 const metaContent = readFileSync(META, 'utf8')
 const versionMatch = metaContent.match(/HAND_ENGINE_VERSION\s*=\s*(\d+)/)
