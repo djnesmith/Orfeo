@@ -42,3 +42,12 @@ On macOS the app gets Electron's standard app menu (About, Hide, Quit ⌘Q) and 
 - Commits: the one that adds this entry (`git log -S "role: 'editMenu'" --oneline`)
 - Files: `electron/main.ts`
 - Check: the menu bar shows Orfeo and Edit. Open Settings (Ctrl+,), type in "Search settings…", ⌘A then ⌘X empties it, ⌘V pastes it back. ⌘Q quits.
+
+## 4. Mac icon
+
+`public/icon.icns`, which upstream's `package.json` already names as `mac.icon` but never added. It is the Orfeo mark from `src/components/OrfeoMark.tsx` in `#E68621` on transparent, sized and placed like `public/icon.ico` (within 0.4% RMSE at 256px), rendered from the SVG path so it stays sharp at 1024px.
+
+- Commits: the one that adds this entry (`git log --oneline -- public/icon.icns`)
+- Files: `public/icon.icns`
+- To remake it: wrap the `d="…"` path from `OrfeoMark.tsx` in a 1024×1024 SVG as `<g transform="translate(138.5 92) scale(5.6)"><path fill="#E68621" d="…"/></g>`, render 16–1024px PNGs into `Orfeo.iconset` with `rsvg-convert` (names `icon_<n>x<n>.png` and `@2x`), then `iconutil -c icns Orfeo.iconset -o public/icon.icns`.
+- Check: after a build, the Dock shows the orange Orfeo mark, not the Electron atom.
