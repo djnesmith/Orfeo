@@ -1968,7 +1968,11 @@ app.whenReady().then(async () => {
   // uncoordinated zoom mechanism fighting the one built below (no step
   // list, no cap, no persistence, no DPR coordination with the piano-roll
   // fix). Nulling it out guarantees there's exactly one zoom path. ────────
-  Menu.setApplicationMenu(null)
+  // Fork: macOS needs a menu for Cmd+Q and the Edit shortcuts in text fields.
+  // appMenu and editMenu carry no zoom accelerators, so the zoom note above still holds
+  Menu.setApplicationMenu(process.platform === 'darwin'
+    ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }])
+    : null)
   createWindow()
   if (updateMode === 'auto') {
     // Delayed so it doesn't compete with the app's own startup work; silent

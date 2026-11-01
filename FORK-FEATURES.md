@@ -34,3 +34,11 @@ ditto release/mac-arm64/Orfeo.app /Applications/Orfeo.app
 - Commits: the one that adds this entry (`git log -S "app.on('window-all-closed', () => app.quit())" --oneline`)
 - Files: `electron/main.ts`
 - Check: open Orfeo, click the red close button; the app leaves the Dock and `pgrep -f Orfeo.app` prints nothing.
+
+## 3. macOS menu bar
+
+On macOS the app gets Electron's standard app menu (About, Hide, Quit ⌘Q) and Edit menu (Undo, Redo, Cut, Copy, Paste, Select All). Upstream sets no menu at all, so ⌘Q and ⌘C/⌘V/⌘X/⌘A did nothing. Windows still gets `null`. Neither role adds zoom shortcuts, so the app's own ⌘+/⌘- zoom stays the only one.
+
+- Commits: the one that adds this entry (`git log -S "role: 'editMenu'" --oneline`)
+- Files: `electron/main.ts`
+- Check: the menu bar shows Orfeo and Edit. Open Settings (Ctrl+,), type in "Search settings…", ⌘A then ⌘X empties it, ⌘V pastes it back. ⌘Q quits.
