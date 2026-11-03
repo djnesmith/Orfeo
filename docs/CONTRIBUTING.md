@@ -5,6 +5,8 @@ a release.*
 
 Contributions are welcome. **Please open an issue before starting a PR** so the
 approach can be agreed first — it saves everyone a wasted round-trip.
+Every pull request has to follow the [two pull request rules](#pull-request-rules):
+it targets `dev`, and every commit is authored by you.
 
 - Bugs and feature ideas: [GitHub Issues](https://github.com/Squarebow/Orfeo/issues)
 - How the code fits together: [ARCHITECTURE.md](ARCHITECTURE.md)
@@ -13,6 +15,7 @@ approach can be agreed first — it saves everyone a wasted round-trip.
 
 ## Contents
 
+- [Pull request rules](#pull-request-rules)
 - [Prerequisites](#prerequisites)
 - [Setup](#setup)
 - [Build commands](#build-commands)
@@ -20,6 +23,46 @@ approach can be agreed first — it saves everyone a wasted round-trip.
 - [Coding conventions](#coding-conventions)
 - [Releases and auto-update](#releases-and-auto-update)
 - [Tech stack](#tech-stack)
+
+---
+
+## Pull request rules
+
+Two simple rules keep the history tidy. A small automatic check
+(`.github/workflows/pr-rules.yml`) looks at every pull request: one aimed at
+`main` gets a friendly reminder, and a commit signed by an AI tool gets a red
+mark with the way to fix it. Push the fixed branch and the check runs again.
+
+### 1. Target `dev`, not `main`
+
+All work lands on `dev` first. `main` only receives `dev`, when a version is
+released. GitHub suggests `main` by default, so when you open the pull request,
+set **base** to `dev`. Already opened it against `main`? Click **Edit** next to
+the title and change the base branch; nothing else needs redoing.
+
+### 2. You are the author of every commit
+
+Use whatever tools you like while working, but the commits are yours: your name,
+your e-mail, your responsibility for the code. An AI coding tool (GitHub
+Copilot, Claude, ChatGPT/Codex, Cursor, Gemini, Devin and the like) must never
+appear:
+
+- as a commit's **author or committer**: check `git config user.name` and
+  `user.email` in the clone you work in, and any agent mode that commits for you;
+- in a **`Co-authored-by:`** line, or a *Generated with…* / *Assisted-by…* line,
+  in a commit message;
+- in the pull request's **title or description**, the same way.
+
+Already pushed commits like that? Rewrite them under your own name and
+force-push the branch; the pull request updates by itself:
+
+```bash
+git rebase -r origin/dev --exec 'git commit --amend --no-edit --reset-author'
+# then remove any AI Co-authored-by / Generated-with lines (git rebase -i, reword)
+git push --force-with-lease
+```
+
+Or squash the whole branch into one commit of your own.
 
 ---
 
