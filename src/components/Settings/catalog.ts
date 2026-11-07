@@ -23,7 +23,7 @@ export interface GroupInfo { id: SettingsGroupId; name: string; intro: string; m
 export type SettingId =
   | 'soundEngine' | 'soundFonts' | 'autoLevel' | 'exportAudio'
   | 'showDemo' | 'chordTranscription'
-  | 'noteEditor' | 'tapTempo' | 'tempoWarnings' | 'countIn' | 'skipEmptyBars' | 'handAssignment' | 'loopRegion' | 'focusMode'
+  | 'noteEditor' | 'unsavedWarning' | 'tapTempo' | 'tempoWarnings' | 'countIn' | 'skipEmptyBars' | 'handAssignment' | 'loopRegion' | 'focusMode'
   | 'stepThrough' | 'chordPrompter' | 'closePanels' | 'handTags' | 'trackVu'
   | 'displaySystem' | 'accidentals' | 'chordTracking' | 'chordReading' | 'chordNaming'
   | 'keyRange' | 'showOctaves' | 'showNoteNames' | 'reflectPianoRoll' | 'preciseScrubTime' | 'explorerPause'
@@ -54,7 +54,7 @@ export const GROUPS: GroupInfo[] = [
     stack: [['tapTempo', 'loopRegion', 'focusMode'], ['tempoWarnings', 'preciseScrubTime', 'explorerPause'], ['countIn', 'skipEmptyBars']] },
   { id: 'practice', name: t`Practice`, intro: t`Tools for practising`, manualUrl: 'https://orfeo.cc/docs/practicing-with-midi-files' },
   { id: 'editing', name: t`Editing`, intro: t`Edit your songs`, manualUrl: 'https://orfeo.cc/docs/editing-midi-files',
-    stack: [['handAssignment'], ['noteEditor'], ['trackVu']], looseFirst: true },
+    stack: [['handAssignment'], ['noteEditor'], ['trackVu', 'unsavedWarning']], looseFirst: true },
   { id: 'notation', name: t`Chords & Notation`, intro: t`Read chords and notes`, manualUrl: 'https://orfeo.cc/docs/practicing-with-midi-files/how-orfeo-reads-chords' },
   { id: 'keyboard', name: t`Virtual Keyboard`, intro: t`Set up the keyboard`, manualUrl: 'https://orfeo.cc/docs/playing-midi-files/the-virtual-keyboard' },
   { id: 'piano-roll', name: t`Piano Roll`, intro: t`Tune the falling notes`, manualUrl: 'https://orfeo.cc/docs/playing-midi-files/the-piano-roll',
@@ -85,7 +85,7 @@ export const SETTINGS: SettingInfo[] = [
     keywords: 'pdf chart transcript export' },
   // ── Playback & Editing
   { id: 'tapTempo', group: 'playback-editing', name: t`Tap Tempo`, summary: t`A TAP pad for fixing songs whose bar lines don't match the music.`,
-    description: t`Adds a red TAP pad next to the tempo, for fixing songs whose bar lines and metronome don't match the music.`,
+    description: t`Adds a red TAP pad next to the tempo, for fixing songs whose bar lines and metronome don't match the music. To start a whole song over, right-click it in the Library, open File Info and choose Rebuild tempo or Copy bars. For bars that change length, type a pattern like 3 3 3 4 in the result, or right-click TAP and choose Change bars from here.`,
     keywords: 'tap tempo bpm metronome beat' },
   { id: 'tempoWarnings', group: 'playback-editing', name: t`Tempo warnings`, summary: t`Mark songs whose bar lines miss the music's beat.`,
     description: t`Marks songs whose bar lines and metronome don't match the music's steady beat — the ones Tap Tempo can fix. Shown next to Key in the top bar and in the Library.`,
@@ -96,9 +96,12 @@ export const SETTINGS: SettingInfo[] = [
   { id: 'skipEmptyBars', group: 'playback-editing', name: t`Skip empty bars at the start`, summary: t`Start every song where the music starts.`,
     description: t`Songs that begin with silent bars open with the music on bar 1: the piano roll, bar numbers, playback, loops and step-through all start there. Your files are never changed — switch it off to see a song exactly as written. Keep drum count-ins keeps one or two bars of plain drum clicks before the music. Switching this on switches off Chord Transcription, whose charts number the bars as the file has them.`,
     keywords: 'empty bars silence lead-in intro start trim count-in skip' },
-  { id: 'handAssignment', group: 'editing', name: t`Hand Assignment`, summary: t`Colours each piano note by the hand that plays it.`,
-    description: t`Automatic hand assignment for piano that colours each note by the hand that plays it — a guideline, not a verified transcript. For an exact split, use the MIDI Note Editor's hand tool to assign notes to the left and right hand yourself.`,
+  { id: 'handAssignment', group: 'editing', name: t`Hand Assignment`, summary: t`On a single piano track, colours each note by the hand that plays it.`,
+    description: t`On a single piano track, Orfeo works out which hand plays each note and colours it to match. Several piano or organ tracks are read together, as one player's two hands. A guideline, not a verified transcript. For an exact split, use the MIDI Note Editor's hand tool to assign notes to the left and right hand yourself.`,
     keywords: 'left right hand fingers split' },
+  { id: 'unsavedWarning', group: 'editing', name: t`Warn about unsaved changes`, summary: t`Asks before changes to a song are lost.`,
+    description: t`Asks before you close Orfeo or the Playback Editor, or open another song, with changes that aren't saved, such as tracks shown or hidden, keyboard lights, mute or the Mixer. Solo isn't included: it only lasts for the session.`,
+    keywords: 'save close quit lose lost changes popup reminder' },
   { id: 'noteEditor', group: 'editing', name: t`MIDI Note Editor`, summary: t`Edit notes directly on the piano roll.`,
     description: t`Shows the note-editing icon in the Tracks panel, to edit notes directly on the piano roll.`,
     keywords: 'edit notes editor' },

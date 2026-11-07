@@ -17,6 +17,7 @@ import { TRUST_VERSION, type TrustResult } from '../utils/tempoTrust'
 import { velocityDropRatio, suggestCompressorPreset } from '../utils/velocityAnalysis'
 import { applyHandColors, isHex, handHex, followedHandColor, DEFAULT_HAND_LH, DEFAULT_HAND_RH } from '../utils/handPalette'
 import { HAND_ASSIGN_GROUPS, focusRole } from '../utils/keyboardGroups'
+import type { TrackBaseline } from '../utils/unsavedChanges'
 
 // ── Focus mode: every track's mute + eye from just before Focus went on, so
 // the second click puts back exactly what you had. Null while Focus is off.
@@ -155,9 +156,9 @@ interface OrfeoStore {
   setLockedChordModalOpen: (open: boolean) => void
   mixerOpen: boolean
   setMixerOpen: (open: boolean) => void
-  // Snapshot of volume/pan/chorus/reverb as loaded from the file — diffed
-  // against live `tracks` values on mixer close to detect unsaved changes.
-  mixerBaseline: Record<number, { volume: number; pan: number; chorus: number; reverb: number }>
+  // Snapshot of each track as loaded from the file — diffed against live
+  // `tracks` values to detect unsaved changes (Mixer close, closing Orfeo).
+  mixerBaseline: TrackBaseline
   midiEditorOpen: boolean
   setMidiEditorOpen: (open: boolean) => void
   pendingImportedFile: {
@@ -246,6 +247,9 @@ interface OrfeoStore {
   noteEditorToolbarX: number
   noteEditorToolbarY: number
   setNoteEditorToolbarPos: (x: number, y: number) => void
+  // Where the Explorers were last dragged to; null until they are
+  explorerPositions: { chord: { x: number; y: number } | null; scale: { x: number; y: number } | null }
+  setExplorerPosition: (which: 'chord' | 'scale', pos: { x: number; y: number }) => void
   noteEditorSoloTrackIndex: number | null
   preSoloTrackVisibility: boolean[] | null
   soloTrackForEdit: (index: number, opts?: { keepPlayhead?: boolean }) => void
@@ -367,6 +371,9 @@ interface OrfeoStore {
   unhideLibraryFile: (path: string) => void
   showHiddenLibraryFiles: boolean
   setShowHiddenLibraryFiles: (v: boolean) => void
+  // Library rows as "Song — Artist", sorted by song. Display only: files keep their names
+  librarySongFirst: boolean
+  setLibrarySongFirst: (v: boolean) => void
   remapLibraryPaths: (pairs: { oldPath: string; newPath: string }[]) => void
   lastFolderOf: Map<string, string | null>
   setLastFolderOf: (map: Map<string, string | null>) => void
@@ -495,7 +502,9 @@ interface OrfeoStore {
   // ── Tracks panel's per-track color line doubles as a mini VU meter during
   // playback when this is on; always shows the plain static color when off. ──
   trackVuColorEnabled: boolean
+  unsavedWarningEnabled: boolean
   setTrackVuColorEnabled: (v: boolean) => void
+  setUnsavedWarningEnabled: (v: boolean) => void
 
   handLabelMode: 'practice' | 'performance'
   setHandLabelMode: (mode: 'practice' | 'performance') => void
@@ -587,7 +596,10 @@ export const useStore = create<OrfeoStore>((set, get) => ({
     })
     const mixerBaseline: OrfeoStore['mixerBaseline'] = {}
     for (const ts of newTracks) {
-      mixerBaseline[ts.index] = { volume: ts.volume, pan: ts.pan, chorus: ts.chorus, reverb: ts.reverb }
+      mixerBaseline[ts.index] = {
+        volume: ts.volume, pan: ts.pan, chorus: ts.chorus, reverb: ts.reverb,
+        muted: ts.muted, visible: ts.visible, showOnKeyboard: ts.showOnKeyboard,
+      }
     }
     _focusSnapshot = null
     set({
@@ -883,6 +895,8 @@ export const useStore = create<OrfeoStore>((set, get) => ({
   noteEditorToolbarX: 24,
   noteEditorToolbarY: 80,
   setNoteEditorToolbarPos: (noteEditorToolbarX, noteEditorToolbarY) => set({ noteEditorToolbarX, noteEditorToolbarY }),
+  explorerPositions: { chord: null, scale: null },
+  setExplorerPosition: (which, pos) => set(s => ({ explorerPositions: { ...s.explorerPositions, [which]: pos } })),
 
   // ── Note Editor: track solo + first-run walkthrough ───────────────────────
   noteEditorSoloTrackIndex: null,
@@ -1094,7 +1108,9 @@ export const useStore = create<OrfeoStore>((set, get) => ({
   setAutoCollapseDrawers: (autoCollapseDrawers) => set({ autoCollapseDrawers }),
 
   trackVuColorEnabled: true,
+  unsavedWarningEnabled: true,
   setTrackVuColorEnabled: (trackVuColorEnabled) => set({ trackVuColorEnabled }),
+  setUnsavedWarningEnabled: (unsavedWarningEnabled) => set({ unsavedWarningEnabled }),
 
   // ── Hand label mode — practice (static, tag-based) or performance (per-note, live) ─
   // Practice mode's UI toggle is disabled (see SettingsPanel.tsx) — proves
@@ -1163,6 +1179,8 @@ export const useStore = create<OrfeoStore>((set, get) => ({
   })),
   showHiddenLibraryFiles: false,
   setShowHiddenLibraryFiles: (showHiddenLibraryFiles) => set({ showHiddenLibraryFiles }),
+  librarySongFirst: false,
+  setLibrarySongFirst: (librarySongFirst) => set({ librarySongFirst }),
   // ── Applies old→new path pairs after a folder move/rename, so a starred or
   // hidden file doesn't silently lose that state when its path changes. ──────
   remapLibraryPaths: (pairs) => set((s) => {
@@ -1211,6 +1229,9 @@ async function restoreLibraryPrefs() {
     if (typeof prefs.showHiddenLibraryFiles === 'boolean') {
       useStore.setState({ showHiddenLibraryFiles: prefs.showHiddenLibraryFiles })
     }
+    if (typeof prefs.librarySongFirst === 'boolean') {
+      useStore.setState({ librarySongFirst: prefs.librarySongFirst })
+    }
     if (prefs.noteNaming) store.setNoteNaming(prefs.noteNaming)
     if (prefs.accidentals) store.setAccidentals(prefs.accidentals)
     if (prefs.chordTrackingMode === 'auto' || prefs.chordTrackingMode === 'harmony' || prefs.chordTrackingMode === 'follow') {
@@ -1252,6 +1273,10 @@ async function restoreLibraryPrefs() {
       useStore.setState({ tempoWarningDismissed: dismissed, tempoTrustCache: cache, libraryTrustIndex: index })
     }
     if (typeof prefs.noteEditorToolbarX === 'number' && typeof prefs.noteEditorToolbarY === 'number') store.setNoteEditorToolbarPos(prefs.noteEditorToolbarX, prefs.noteEditorToolbarY)
+    for (const which of ['chord', 'scale'] as const) {
+      const p = prefs.explorerPositions?.[which]
+      if (typeof p?.x === 'number' && typeof p?.y === 'number') store.setExplorerPosition(which, { x: p.x, y: p.y })
+    }
     if (typeof prefs.chordPrompterEnabled === 'boolean') store.setChordPrompterEnabled(prefs.chordPrompterEnabled)
     if (typeof prefs.chordTranscriptionEnabled === 'boolean') store.setChordTranscriptionEnabled(prefs.chordTranscriptionEnabled)
     if (typeof prefs.hideDemoFolder === 'boolean') store.setHideDemoFolder(prefs.hideDemoFolder)
@@ -1280,6 +1305,7 @@ async function restoreLibraryPrefs() {
     if (typeof prefs.supportNoteEnabled === 'boolean') store.setSupportNoteEnabled(prefs.supportNoteEnabled)
     if (typeof prefs.explorerPausesPlayback === 'boolean') store.setExplorerPausesPlayback(prefs.explorerPausesPlayback)
     if (typeof prefs.trackVuColorEnabled === 'boolean') store.setTrackVuColorEnabled(prefs.trackVuColorEnabled)
+    if (typeof prefs.unsavedWarningEnabled === 'boolean') store.setUnsavedWarningEnabled(prefs.unsavedWarningEnabled)
     if (typeof prefs.autoMuteNonKeyboard === 'boolean') store.setAutoMuteNonKeyboard(prefs.autoMuteNonKeyboard)
     if (prefs.settingsGroupsCollapsed && typeof prefs.settingsGroupsCollapsed === 'object' && !Array.isArray(prefs.settingsGroupsCollapsed)) {
       const defaults = store.settingsGroupsCollapsed
@@ -1314,6 +1340,7 @@ const _unsubFav = useStore.subscribe((state) => {
       libraryFavourites:      Array.from(state.libraryFavourites),
       hiddenLibraryFiles:     state.hiddenLibraryFiles,
       showHiddenLibraryFiles: state.showHiddenLibraryFiles,
+      librarySongFirst:       state.librarySongFirst,
     }).catch(() => {})
   }, 1000)
 })
@@ -1355,6 +1382,7 @@ let _prevSamplesIntroduced: boolean | null = null
 let _prevCountInBars: number | null = null
 let _prevTempoCorrections: object | null = null
 let _prevNoteEditorToolbarX:   number  | null = null
+let _prevExplorerPositions: unknown = null
 let _prevNoteEditorToolbarY:   number  | null = null
 let _prevChordPrompterEnabled: boolean | null = null
 let _prevChordTranscriptionEnabled: boolean | null = null
@@ -1382,6 +1410,7 @@ let _prevTooltipsEnabled: boolean | null = null
 let _prevSupportNoteEnabled: boolean | null = null
 let _prevExplorerPausesPlayback: boolean | null = null
 let _prevTrackVuColorEnabled: boolean | null = null
+let _prevUnsavedWarningEnabled: boolean | null = null
 let _prevAutoMuteNonKeyboard: boolean | null = null
 let _prevSettingsGroupsCollapsed: string | null = null
 let _prevNoteEditorWalkthroughSeen: boolean | null = null
@@ -1426,6 +1455,7 @@ const _unsubPrefs = useStore.subscribe((state) => {
     _prevCountInBars = state.countInBars
     _prevTempoCorrections = state.tempoCorrections
     _prevNoteEditorToolbarX = state.noteEditorToolbarX
+    _prevExplorerPositions = state.explorerPositions
     _prevNoteEditorToolbarY = state.noteEditorToolbarY
     _prevChordPrompterEnabled = state.chordPrompterEnabled
     _prevChordTranscriptionEnabled = state.chordTranscriptionEnabled
@@ -1453,6 +1483,7 @@ const _unsubPrefs = useStore.subscribe((state) => {
     _prevSupportNoteEnabled = state.supportNoteEnabled
     _prevExplorerPausesPlayback = state.explorerPausesPlayback
     _prevTrackVuColorEnabled = state.trackVuColorEnabled
+    _prevUnsavedWarningEnabled = state.unsavedWarningEnabled
     _prevAutoMuteNonKeyboard = state.autoMuteNonKeyboard
     _prevSettingsGroupsCollapsed = JSON.stringify(state.settingsGroupsCollapsed)
     _prevNoteEditorWalkthroughSeen = state.noteEditorWalkthroughSeen
@@ -1500,6 +1531,7 @@ const _unsubPrefs = useStore.subscribe((state) => {
     state.countInBars !== _prevCountInBars ||
     state.tempoCorrections !== _prevTempoCorrections ||
     state.noteEditorToolbarX !== _prevNoteEditorToolbarX ||
+    state.explorerPositions !== _prevExplorerPositions ||
     state.noteEditorToolbarY !== _prevNoteEditorToolbarY ||
     state.chordPrompterEnabled !== _prevChordPrompterEnabled ||
     state.chordTranscriptionEnabled !== _prevChordTranscriptionEnabled ||
@@ -1527,6 +1559,7 @@ const _unsubPrefs = useStore.subscribe((state) => {
     state.supportNoteEnabled !== _prevSupportNoteEnabled ||
     state.explorerPausesPlayback !== _prevExplorerPausesPlayback ||
     state.trackVuColorEnabled !== _prevTrackVuColorEnabled ||
+    state.unsavedWarningEnabled !== _prevUnsavedWarningEnabled ||
     state.autoMuteNonKeyboard !== _prevAutoMuteNonKeyboard ||
     JSON.stringify(state.settingsGroupsCollapsed) !== _prevSettingsGroupsCollapsed ||
     state.noteEditorWalkthroughSeen !== _prevNoteEditorWalkthroughSeen ||
@@ -1566,6 +1599,7 @@ const _unsubPrefs = useStore.subscribe((state) => {
     _prevCountInBars = state.countInBars
     _prevTempoCorrections = state.tempoCorrections
     _prevNoteEditorToolbarX = state.noteEditorToolbarX
+    _prevExplorerPositions = state.explorerPositions
     _prevNoteEditorToolbarY = state.noteEditorToolbarY
     _prevChordPrompterEnabled = state.chordPrompterEnabled
     _prevChordTranscriptionEnabled = state.chordTranscriptionEnabled
@@ -1593,6 +1627,7 @@ const _unsubPrefs = useStore.subscribe((state) => {
     _prevSupportNoteEnabled = state.supportNoteEnabled
     _prevExplorerPausesPlayback = state.explorerPausesPlayback
     _prevTrackVuColorEnabled = state.trackVuColorEnabled
+    _prevUnsavedWarningEnabled = state.unsavedWarningEnabled
     _prevAutoMuteNonKeyboard = state.autoMuteNonKeyboard
     _prevSettingsGroupsCollapsed = JSON.stringify(state.settingsGroupsCollapsed)
     _prevNoteEditorWalkthroughSeen = state.noteEditorWalkthroughSeen
@@ -1639,6 +1674,7 @@ const _unsubPrefs = useStore.subscribe((state) => {
       tempoCorrections: state.tempoCorrections,
       noteEditorToolbarX: state.noteEditorToolbarX,
       noteEditorToolbarY: state.noteEditorToolbarY,
+      explorerPositions: state.explorerPositions,
       chordPrompterEnabled: state.chordPrompterEnabled,
       chordTranscriptionEnabled: state.chordTranscriptionEnabled,
       hideDemoFolder: state.hideDemoFolder,
@@ -1666,6 +1702,7 @@ const _unsubPrefs = useStore.subscribe((state) => {
       supportNoteEnabled: state.supportNoteEnabled,
       explorerPausesPlayback: state.explorerPausesPlayback,
       trackVuColorEnabled: state.trackVuColorEnabled,
+      unsavedWarningEnabled: state.unsavedWarningEnabled,
       autoMuteNonKeyboard: state.autoMuteNonKeyboard,
       settingsGroupsCollapsed: state.settingsGroupsCollapsed,
       noteEditorWalkthroughSeen: state.noteEditorWalkthroughSeen,

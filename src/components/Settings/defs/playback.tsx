@@ -4,6 +4,30 @@ import { t } from '../../../utils/i18n'
 import { Switch, OptionBtn, FingerStepper, InlineIcon, SubLabel, HelpText } from '../controls'
 import type { SettingDef } from '../types'
 import { applySkipEmptyBarsChange } from '../../../utils/reloadOpenSong'
+import { confirmDialog } from '../../../utils/confirmController'
+import { simAvailable } from '../../../utils/midiSimulator'
+import { unsavedDetail } from '../../../utils/unsavedChanges'
+
+// Test builds: see the closing warning without changing a song and closing Orfeo
+function UnsavedWarningPreview() {
+  if (!simAvailable) return null
+  const show = () => void confirmDialog({
+    title: t`Unsaved changes`,
+    message: t`These changes to the song will be lost when Orfeo closes:`,
+    detail: unsavedDetail({ shown: 2, lights: 1, muted: 1, mixer: 3, playbackEditor: true }),
+    buttons: [t`Close Without Saving`, t`Cancel`],
+    destructiveIndex: 0,
+    startOnSafe: true,
+  })
+  return (
+    <div style={{ marginTop: 12, padding: 8, border: '1px dashed var(--border2)', borderRadius: 4 }}>
+      <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 6 }}>{t`Closing warning · test builds only`}</div>
+      <button onClick={show}
+        style={{ padding: '3px 6px', borderRadius: 4, border: '1px dashed var(--border2)', background: 'transparent', color: 'var(--text-default)',
+          fontSize: 10, fontFamily: 'var(--font-ui)', cursor: 'pointer' }}>{t`Show warning`}</button>
+    </div>
+  )
+}
 
 function TapTempoExtra() {
   const on = useStore(s => s.tapTempoPadEnabled)
@@ -98,13 +122,17 @@ function HandAssignmentExtra() {
 function HandColoursLink() {
   return (
     <button onClick={() => useStore.getState().openSettingsWindow('appearance')}
-      style={{ padding: 0, border: 'none', background: 'none', cursor: 'pointer', font: 'inherit', fontStyle: 'normal', color: 'var(--text-amber)', textDecoration: 'underline', textUnderlineOffset: 2 }}>
+      style={{ padding: 0, border: 'none', background: 'none', cursor: 'pointer', font: 'inherit', fontStyle: 'normal', color: 'var(--text-amber)' }}>
       {t`Set your own hand colours`}
     </button>
   )
 }
 
 export const PLAYBACK_DEFS: SettingDef[] = [
+  {
+    id: 'unsavedWarning', icon: TriangleAlert, kind: 'switch', Extra: UnsavedWarningPreview,
+    Control: () => { const v = useStore(s => s.unsavedWarningEnabled); return <Switch value={v} onChange={useStore.getState().setUnsavedWarningEnabled} label={t`Warn about unsaved changes`} /> },
+  },
   {
     id: 'noteEditor', icon: AudioLines, kind: 'switch',
     Control: () => { const v = useStore(s => s.noteEditorEnabled); return <Switch value={v} onChange={useStore.getState().setNoteEditorEnabled} label="MIDI Note Editor" /> },
@@ -140,7 +168,7 @@ export const PLAYBACK_DEFS: SettingDef[] = [
     id: 'handAssignment', icon: Hand, kind: 'switch', Extra: HandAssignmentExtra,
     Control: () => { const v = useStore(s => s.showHandLabels); return <Switch value={v} onChange={useStore.getState().setShowHandLabels} label="Hand Assignment" /> },
     Description: () => <>
-      Automated hand assignment for piano that colors each note by the hand that plays it. A guideline, not a verified transcript!
+      {t`On a single piano track, Orfeo works out which hand plays each note and colours it to match. Several piano or organ tracks are read together, as one player's two hands. A guideline, not a verified transcript!`}
       <br /><br />
       For a perfectly accurate split use MIDI note editor and click the <InlineIcon><Hand size={11} /></InlineIcon> icon to manually assign notes to left and right hand.
       <br /><br />

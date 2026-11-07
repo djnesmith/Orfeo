@@ -194,6 +194,7 @@ declare global {
       openFolder:          () => Promise<string | null>
       scanMidiFolder:      (path: string) => Promise<LibraryFile[]>
       getDemoFolder:       () => Promise<string | null>
+      readLicenses:        () => Promise<{ orfeo: string; thirdParty: string } | null>
       loadMidiFromPath:    (path: string) => Promise<MidiFileResult | null>
       // Export to audio: writes to <library>/Orfeo/Exports, returns the saved path
       saveExport:          (songPath: string, libraryFolder: string | null, fileName: string, bytes: Uint8Array) => Promise<string>
@@ -246,6 +247,7 @@ declare global {
       // Auto-update (GitHub Releases)
       getUpdateInfo:       () => Promise<UpdateInfo>
       checkForUpdates:     () => Promise<void>
+      getNewVersion:       () => Promise<string | null>
       installUpdate:       () => Promise<void>
       onUpdateStatus:      (fn: (data: UpdateStatus) => void) => void
       offUpdateStatus:     () => void
@@ -279,7 +281,7 @@ export type UpdateInfo = {
 export type SupportNoteInfo = { store: boolean; prompt: boolean }
 
 export type UpdateStatus = {
-  state: 'idle' | 'checking' | 'up-to-date' | 'downloading' | 'ready' | 'error' | 'unavailable'
+  state: 'idle' | 'checking' | 'up-to-date' | 'downloading' | 'ready' | 'error' | 'unavailable' | 'available'
   version?: string
   percent?: number
   reason?: string
@@ -302,6 +304,8 @@ export interface TapSession {
   fileMatch?: number | null  // taps sit on the file's own beats at this ratio (1, 2, 0.5)
   freeSegment?: import('../utils/tempoCorrection').TempoSegment | null  // grid from the taps
   nearOriginal?: boolean     // tapped tempo is within ±3% of the file's own (offer "Original is fine")
+  insert?: boolean           // a bar change at one point: what comes after it stays
+  copiedFrom?: string        // bars copied from this file (copyBars.ts)
 }
 
 // ── Settings window / Quick Settings group ids — same keys the drawer's

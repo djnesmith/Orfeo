@@ -1,6 +1,6 @@
 {
   "name": "orfeo",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Modern piano learning app with MIDI visualization",
   "author": "SquareBow",
   "license": "SEE LICENSE IN LICENSE.md",
@@ -13,11 +13,15 @@
     "build": "npm run copyworklet && npm run check:hand-engine && electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "node --import ./scripts/ts-esbuild-hooks.mjs src/runAllTests.ts",
+    "dist:linux": "npm run build && electron-builder --linux AppImage deb rpm --x64",
     "dist": "npm run copyworklet && npm run check:hand-engine && npm run native:build && electron-vite build && electron-builder --win nsis portable appx",
     "dist:portable": "npm run copyworklet && npm run check:hand-engine && npm run native:build && electron-vite build --mode test-build && electron-builder --win portable",
+    "dist:mac": "npm run build && electron-builder --mac -c.mac.identity=-",
     "release:notes": "node scripts/release-notes.mjs",
     "native:build": "node scripts/build-native.mjs",
-    "i18n:extract": "node scripts/i18n-extract.mjs"
+    "i18n:extract": "node scripts/i18n-extract.mjs",
+    "licenses": "node scripts/generate-licenses.mjs"
   },
   "build": {
     "appId": "com.squarebow.orfeo",
@@ -67,14 +71,23 @@
         "to": "fonts"
       },
       {
-        "from": "public/demo",
+        "from": "public/Demo",
         "to": "demo"
+      },
+      {
+        "from": "LICENSE.md",
+        "to": "licenses/LICENSE.md"
+      },
+      {
+        "from": "THIRD_PARTY_LICENSES.md",
+        "to": "licenses/THIRD_PARTY_LICENSES.md"
       },
       {
         "from": "native/build",
         "to": "native",
         "filter": [
           "orfeo_audio.node",
+          "orfeo-review.exe",
           "fluidsynth/*.dll"
         ]
       }
@@ -133,9 +146,34 @@
     "portable": {
       "artifactName": "${productName}-${version}-portable.${ext}"
     },
+    "linux": {
+      "icon": "build/appx/Square310x310Logo.png",
+      "category": "Audio",
+      "synopsis": "Learn piano from MIDI files",
+      "maintainer": "SquareBow <info@squarebow.com>",
+      "vendor": "SquareBow",
+      "artifactName": "${productName}-${version}-linux-${arch}.${ext}"
+    },
     "mac": {
-      "target": "dmg",
-      "icon": "public/icon.icns"
+      "category": "public.app-category.music",
+      "icon": "build/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
     }
   },
   "dependencies": {
@@ -158,7 +196,6 @@
     "tonal": "^6.4.0",
     "tone": "^15.1.22",
     "wasm-media-encoders": "^0.7.0",
-    "webaudiofont": "^3.0.4",
     "zustand": "^5.0.16"
   },
   "devDependencies": {

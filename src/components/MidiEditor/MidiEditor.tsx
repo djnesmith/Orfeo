@@ -6,9 +6,11 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo, type CSSProperties } from 'react'
+import { t } from '../../utils/i18n'
 import { createPortal } from 'react-dom'
 import { Check, X, Save, FolderOpen, AlertCircle, ChevronDown, ChevronRight, Search, Merge, Split, Undo2, RotateCcw, Piano, Bell, Church, Guitar, Music2, AudioWaveform, Users, Megaphone, Wind, Feather, Cpu, Globe, Drum, Radio, Waves, Sparkles, SwatchBook, Eye, EyeOff, ThumbsUp, ToggleLeft, ToggleRight, AudioLines } from 'lucide-react'
 import { confirmDialog } from '../../utils/confirmController'
+import { setPlaybackEditorCheck } from '../../utils/unsavedChanges'
 import { PENCIL_CURSOR } from '../../utils/cursors'
 import { TRACK_COLOR_PALETTE, pianoFamilyColor, distinctTrackColor } from '../../utils/colors'
 import { handHex } from '../../utils/handPalette'
@@ -28,6 +30,7 @@ import { computeTempoKeyPayload } from '../../utils/tempoKeySave'
 import { songKey } from '../../utils/songIdentity'
 import { carryCorrection } from '../../utils/tempoCorrection'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
+import { followTrackFlags, type TrackFlags } from '../../utils/editorRowFollow'
 import { useClampPositionOnZoom } from '../../hooks/useClampPositionOnZoom'
 import Tooltip from '../Tooltip'
 import PianoKeysIcon from '../PianoKeysIcon'
@@ -873,10 +876,17 @@ export default function MidiEditor() {
   // ── Snapshot of each row's color/name/roll/keyboard as of the last time
   // rows were freshly loaded (open, or post-save resync) — buildSaveSummary
   // diffs against this to report only what actually changed this session.
-  const originalRowsRef = useRef<Map<number, { color: string; colorSource: EditorTrack['colorSource']; trackName: string; visible: boolean; showOnKeyboard: boolean; program: number }>>(new Map())
+  const originalRowsRef = useRef<Map<number, { included: boolean; color: string; colorSource: EditorTrack['colorSource']; trackName: string; visible: boolean; showOnKeyboard: boolean; program: number }>>(new Map())
   const snapshotRows = (rows: EditorTrack[]) => {
-    originalRowsRef.current = new Map(rows.map(r => [r.index, { color: r.color, colorSource: r.colorSource, trackName: r.trackName, visible: r.visible, showOnKeyboard: r.showOnKeyboard, program: r.program }]))
+    originalRowsRef.current = new Map(rows.map(r => [r.index, { included: r.included, color: r.color, colorSource: r.colorSource, trackName: r.trackName, visible: r.visible, showOnKeyboard: r.showOnKeyboard, program: r.program }]))
   }
+  // Closing Orfeo asks about these edits too; the latest check, from the last render
+  const stagedEditsRef = useRef<() => boolean>(() => false)
+  useEffect(() => {
+    // this component stays mounted while closed, so ask only while it's open
+    setPlaybackEditorCheck(() => useStore.getState().midiEditorOpen && stagedEditsRef.current())
+    return () => setPlaybackEditorCheck(null)
+  }, [])
   // ── Cancel — handleApplyColor writes color straight into the live store (so
   // TrackPanel/Keyboard/PianoRoll preview it immediately while the editor is
   // open), unlike every other edit here which stays staged in `state.rows`
@@ -974,6 +984,20 @@ export default function MidiEditor() {
     // keyed on the file's bytes: a Tap Tempo grid swap (same file, new midi
     // object) must not discard unsaved row edits
   }, [(midi as any)?._raw])
+
+  // ── Mute, eye and keyboard changed in the Tracks panel while the editor is
+  // open reach their row at once; rows are otherwise only built on open. ──────
+  const flagsBeforeRef = useRef<TrackFlags[]>([])
+  useEffect(() => {
+    const before = flagsBeforeRef.current
+    flagsBeforeRef.current = tracks
+    if (!midiEditorOpen) return
+    setState(s => {
+      if (!s) return s
+      const rows = followTrackFlags(s.rows, before, tracks)
+      return rows === s.rows ? s : { ...s, rows }
+    })
+  }, [tracks])
 
   // ── Drag: mousemove / mouseup ─────────────────────────────────────────────────
   const onMouseMove = useCallback((e: MouseEvent) => {
@@ -1224,6 +1248,32 @@ export default function MidiEditor() {
 
   const handleSave = () => performSave()
 
+  // ── Has anything changed since the rows were loaded? A track that was already
+  // muted arrives unchecked, so only a change from that counts. Plain functions,
+  // for the reason given at handleOpenInNoteEditor below. ─────────────────────
+  const hasStagedEdits = () => state.rows.some(r => {
+    if (r.isMerged || r.splitHand) return true
+    const orig = originalRowsRef.current.get(r.index)
+    return !!orig && (r.included !== orig.included || r.color !== orig.color || r.trackName !== orig.trackName ||
+      r.visible !== orig.visible || r.showOnKeyboard !== orig.showOnKeyboard || r.newProgram !== orig.program)
+  })
+  stagedEditsRef.current = hasStagedEdits
+
+  const handleClose = async () => {
+    if (useStore.getState().unsavedWarningEnabled && !saveResult?.ok && hasStagedEdits()) {
+      const choice = await confirmDialog({
+        title: t`Unsaved changes`,
+        message: t`Your changes here aren't saved yet.`,
+        detail: t`Closing the Playback Editor loses them. To keep them, use Save & Reload, which makes a new version and leaves your original file as it is.`,
+        buttons: [t`Close Without Saving`, t`Keep Editing`],
+        destructiveIndex: 0,
+        startOnSafe: true,
+      })
+      if (choice !== 0) return
+    }
+    handleCancel()
+  }
+
   // ── Open a track in the Note Editor, solo'd/editable — the split-info
   // row's "fine-tune it yourself" action. Prompts to save first if this
   // session has staged changes (same Save/Discard/Cancel pattern as
@@ -1330,7 +1380,7 @@ export default function MidiEditor() {
       // The user's hand colours as literal hex (not the CSS var): the colour
       // travels into ORFEO_TRACK_COLOR meta on save, which only accepts hex
       // (see midiParser.ts's restore regex)
-      const lhRow: EditorTrack ={ ...orig, name: 'Left Hand', trackName: lhName, noteCount: lhCount, splitHand: 'L', splitOriginIndex: trackIndex, mergeSelected: false, color: handHex().lh, colorSource: 'custom' }
+      const lhRow: EditorTrack = { ...orig, name: 'Left Hand', trackName: lhName, noteCount: lhCount, splitHand: 'L', splitOriginIndex: trackIndex, mergeSelected: false, color: handHex().lh, colorSource: 'custom' }
       const rhRow: EditorTrack = { ...orig, index: _mergeIdCounter++, name: 'Right Hand', trackName: rhName, noteCount: rhCount, splitHand: 'R', splitOriginIndex: trackIndex, mergeSelected: false, color: handHex().rh, colorSource: 'custom' }
       const rows = [...s.rows]
       rows.splice(idx, 1, lhRow, rhRow)
@@ -1411,7 +1461,7 @@ export default function MidiEditor() {
         </div>
         <button
           data-no-drag="true"
-          onClick={handleCancel}
+          onClick={() => void handleClose()}
           style={{ ...modalCloseButtonStyle, justifySelf: 'end' }}
           onMouseEnter={e => e.currentTarget.style.color = modalCloseButtonHoverColor}
           onMouseLeave={e => e.currentTarget.style.color = modalCloseButtonIdleColor}
@@ -1837,7 +1887,7 @@ export default function MidiEditor() {
           </div>
           {saveResult?.ok && saveResult.filePath ? (
             <Tooltip
-              title="Opens Windows Explorer with this exact saved file highlighted — settles any doubt about where it landed."
+              title={t`Opens the folder with this exact saved file highlighted, so you can see where it landed.`}
               oneLine
               wrapperStyle={{ width: SHOW_IN_FOLDER_W, flexShrink: 0 }}
             >
@@ -1898,7 +1948,7 @@ export default function MidiEditor() {
           ) : (
             <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
               <button
-                onClick={handleCancel}
+                onClick={() => void handleClose()}
                 style={{ width: FOOTER_BTN_W, padding: '6px 0', borderRadius: 'var(--radius-md)', background: 'transparent', border: '1px solid var(--border2)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)', cursor: 'pointer', transition: 'all 0.12s' }}
                 onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-amber)'; e.currentTarget.style.borderColor = 'var(--accent-amber-strong)' }}
                 onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.borderColor = 'var(--border2)' }}
