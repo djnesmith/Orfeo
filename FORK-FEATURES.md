@@ -2,7 +2,7 @@
 
 Read this before merging upstream. Every item must still work after the merge.
 
-Branch: `main`. Base: `upstream/main` (Squarebow/Orfeo), forked at `6e7dd5e` (tag `v1.6.0`). Last synced with upstream `ae51ed3` (v1.7.0 plus fixes).
+Branch: `main`. Base: `upstream/main` (Squarebow/Orfeo), forked at `6e7dd5e` (tag `v1.6.0`). Last synced with upstream `793a1a0` (v1.7.2).
 
 As of v1.7.0 upstream builds macOS itself: `npm run dist:mac` makes an ad-hoc signed dmg and zip for Apple Silicon and Intel. Its native audio engine still runs on Windows only. `scripts/build-native.mjs` can now compile it on macOS (FluidSynth from source, 182e024), but `connectAudioHost` in `electron/main.ts` refuses it on any non-Windows system, and the Mac package ships no `native/` files. On a Mac the app uses its built-in JavaScript synth.
 

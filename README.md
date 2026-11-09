@@ -31,6 +31,7 @@ telemetry; MIDI files are processed entirely on your device.
 - [Download](#download)
 - [Documentation](#documentation)
 - [Building from source](#building-from-source)
+- [Translations](#translations)
 - [FAQ](#faq)
 - [Why Orfeo](#why-orfeo)
 - [License](#license)
@@ -218,6 +219,16 @@ instructions, including macOS/Linux, are in
 
 ---
 
+## Translations
+
+Orfeo's community translations are hosted on
+[Weblate](https://hosted.weblate.org/engage/orfeo/) (the language switcher is
+coming in Orfeo 1.8).
+
+[![Translation status](https://hosted.weblate.org/widget/orfeo/multi-auto.svg)](https://hosted.weblate.org/engage/orfeo/)
+
+---
+
 ## FAQ
 
 <details>
@@ -306,4 +317,4 @@ open source, and a modern interface.
 
 GPL-3.0-or-later © [SquareBow](https://github.com/Squarebow) — see
 [LICENSE.md](LICENSE.md). Bundles GSAP under a separate additional-permission
-grant; see the license file and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+grant; see the top of [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

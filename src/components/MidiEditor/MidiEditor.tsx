@@ -244,6 +244,7 @@ function InstrumentPicker({ program, isDrum, onChange, disabled }: {
 
       {open && createPortal(
         <div
+          className="app-no-drag"
           // Portaled out of the anchor's DOM subtree, so the outside-click
           // handler's `ref.current.contains(target)` check (below) would see
           // every click inside this popup as "outside" and close it
@@ -479,6 +480,7 @@ function ColorPopover({ trackIndex, trackColor, anchor, onApplyColor, onClose }:
     <div
       ref={ref}
       data-no-drag
+      className="app-no-drag"
       style={{
         position: 'fixed', zIndex: 60000,
         left, top, width: POP_W,
@@ -1179,8 +1181,8 @@ export default function MidiEditor() {
   // Save & Reload disappear so a second click here can't silently mint v2,
   // v3, ad infinitum. A failed save leaves Cancel/Save & Reload in place so
   // the user can fix the problem and retry. ──────────────────────────────────
-  const performSave = async () => {
-    if (includedCount === 0) { setSaveResult({ ok: false, msg: 'Select at least one track.' }); return }
+  const performSave = async (): Promise<boolean> => {
+    if (includedCount === 0) { setSaveResult({ ok: false, msg: 'Select at least one track.' }); return false }
 
     // ── Warn before an unchecked track actually disappears from the saved
     // file — easy to reach unnoticed now that a muted/hidden track from the
@@ -1196,10 +1198,11 @@ export default function MidiEditor() {
         buttons: ['Delete & Save', 'Cancel'],
         destructiveIndex: 0,
       })
-      if (choice !== 0) return
+      if (choice !== 0) return false
     }
 
     setSaving(true); setSaveResult(null)
+    let saved = false
     try {
       const includedTracks: { index: number; newProgram: number; name?: string; color?: string; splitHand?: 'L' | 'R'; visible?: boolean; showOnKeyboard?: boolean }[] = []
       for (const row of state.rows.filter(r => r.included)) {
@@ -1239,11 +1242,13 @@ export default function MidiEditor() {
         reloadFile(result.base64, result.fileName, result.filePath, 1 / (tempoKeyPayload?.bpmRatio ?? 1))
         useStore.getState().notifyLibrarySaved(result.filePath)
         window.electronAPI.logFileEvent(result.filePath, 'save', saveSummary)
+        saved = true
       }
     } catch (e: any) {
       setSaveResult({ ok: false, msg: e?.message ?? 'Save failed' })
     }
     setSaving(false)
+    return saved
   }
 
   const handleSave = () => performSave()
@@ -1264,12 +1269,17 @@ export default function MidiEditor() {
       const choice = await confirmDialog({
         title: t`Unsaved changes`,
         message: t`Your changes here aren't saved yet.`,
-        detail: t`Closing the Playback Editor loses them. To keep them, use Save & Reload, which makes a new version and leaves your original file as it is.`,
-        buttons: [t`Close Without Saving`, t`Keep Editing`],
-        destructiveIndex: 0,
+        detail: t`Save & Reload makes a new version with your changes, and your original file stays as it is.`,
+        buttons: [t`Save & Reload`, t`Close Without Saving`, t`Keep Editing`],
+        destructiveIndex: 1,
         startOnSafe: true,
       })
-      if (choice !== 0) return
+      if (choice === 2) return
+      if (choice === 0) {
+        // stays open if the save didn't happen, so the reason can be read
+        if (await performSave()) setMidiEditorOpen(false)
+        return
+      }
     }
     handleCancel()
   }
