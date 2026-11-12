@@ -386,6 +386,7 @@ change to one rule lands in both:
 | `src/utils/starmap.ts`, `src/components/Starmap/`, `src/hooks/useStarmapMorph.ts` | Scales Explorer's Starmap view — made available by Settings › Appearance (`store.starmapEnabled`), shown by the explorer's own STARMAP switch (session state, Circle of Fifths default). Glide: `pairVertices` (shared notes stay, rest least-arc matched), OKLab `mixColour`, ≤400 ms and ≤60 % of a progression step, reduced-motion snap. Held MIDI chords (`store.midiHeldKeys`, written only by useMidiInput) of 3–6 notes take over the star while held (40 ms settle), drawing only. 12-note chromatic ring drawn in the Circle of Fifths' slot, chord star from the explorer's lit chord (`litChord`, set beside each struck chord), scale outline, blue note (`ScaleDef.blueNote`), note colours `PITCH_CLASS_COLORS` (utils/colors.ts). Keys picked through the same `pickKey` as the wedges |
 | `src/utils/genreVoicing.ts` | Chord Explorer Styles (9) — numeral × quality → richer chord type, Classic chord where a Style has none; `isTritoneSub` (Ipanema: a V resolving down a fifth → ♭II7♯11). Style chords missing from the curated tile list resolve from the full chord dictionary |
 | `src/components/ExplorerOctaveControl.tsx` | Octave ˄ ˅ ↺, writes the shared `store.explorerOctave` (session-only) and moves lit keys with it |
+| `src/hooks/usePlayedNotes.ts` + `readPlayedNotes` / `keyWentDown` / `scalesThatFit` in `explorerShared.ts` | Listening to the keyboard: 3+ different held notes (`store.midiHeldKeys`) are read `PLAYED_SETTLE_MS` after the last key goes down; letting go keeps the reading. The Chord Explorer names and selects the chord in the voicing played, silently (`showVoiced`, shared with "Open in Chord Explorer"), switching tier and lifting a notes / hand filter or search that would hide its tile; notes that make no chord light up with their names instead. Both write it with `playedLabel` (slash chord + "1st inv" when inverted, held notes low to high); the Scales Explorer's info row names it and lists the scales it fits (major and natural minor keys first, then keys on the chord's root, then nearest on the circle of fifths), click one to choose it. Off while the Explorer plays a progression |
 
 Shared store fields: `progressionVoicing` (persisted), `colorRootNoteEnabled`
 (persisted, the "Accent root note" switch), `explorerOctave` (session-only).
@@ -473,6 +474,15 @@ src/components/Settings/
 - **Store:** `settingsWindowOpen` / `settingsWindowGroup` (session only),
   `openSettingsWindow(group?)` (`Ctrl` `,`, Setup's arrows, Open settings) and
   the saved `samplesIntroduced` flag (first Samples pick opens the window).
+- **Size and scale:** the window is laid out at its designed 1000 × 640 and
+  scaled as one piece with CSS `zoom` (`frameZoom` = the tighter of width and
+  height against that size, 1–2×), so every card, text and control grows in
+  proportion and the layout never changes. The frame (screen px) is moved by the
+  header and resized by any edge (one side) or corner (keeps proportions);
+  double-clicking an edge resets it. It opens at up to 85 % of the app window, is
+  kept below the 44 px title strip, and is saved as `settingsWindowFrame`.
+  Geometry is pure and tested in `utils/settingsFrame.ts`. Popups opened from
+  it (tooltips, dialogs) are portals outside the zoom: right place, usual size.
 - **Shared hooks** for state both places show: `useSoundfonts` (sound sets,
   Samples loading), `useUpdateCheck`, `useAppZoom`. The update-status and
   sound-set-progress IPC channels allow only one listener each, so their

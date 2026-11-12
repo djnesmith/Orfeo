@@ -5,6 +5,40 @@
      list of 2–4 one-line bullets, then ### New / ### Changed / ### Fixed.
      Newest version at the top. -->
 
+## [1.7.3] — 12. 11. 2026 — The Explorers hear your keyboard, a bigger Settings window
+
+**In short**
+- Hold a chord on your keyboard and both Explorers name it; the Scales Explorer also shows which scales it belongs to.
+- The Settings window opens larger, with bigger text, and resizes from any edge or corner.
+- The tempo can show as a speed in percent instead of BPM.
+- Songs and folders that are shortcuts (symbolic links) now show in the Library.
+
+### Changed
+- **The Chords Explorer follows your keyboard.** With the Explorer open, hold three or more
+  notes on a connected keyboard: it names the chord, picks its root and tile, and lights it in
+  the shape you played, inversion included, without playing it again. A chord that's only in
+  Extended switches the list there, and a notes or hand filter or a search that would hide it
+  is cleared. Notes that make no chord light up with their names instead.
+- **The Scales Explorer shows where a chord belongs.** Hold a chord and the row under the chord
+  tiles names it, with its inversion and the notes you hold, left to right (C/E 1st inv
+  (E G C)), and lists the scales it fits, the likeliest first. Click one to choose that key.
+- **A bigger, resizable Settings window.** It opens larger on a big screen, and everything in
+  it, text, cards and controls, grows with it, so it's much easier to read. Drag any edge to
+  make it wider or taller, or a corner to resize it in proportion; double-click an edge for
+  the size it opened at. It stays clear of the top bar, and remembers its size and place.
+- **Tempo as a speed in percent.** Settings › Playback › Tempo display shows the tempo at the
+  top as BPM, as before, or as a speed against the song's own tempo: 100 % as written, 50 % at
+  half speed. The arrows step by one percent and you can type a speed, just as with BPM. The
+  number keeps the same room whatever it shows, so nothing beside it moves as it changes.
+
+### Fixed
+- **Linked songs and folders show in the Library.** A Library folder whose songs are shortcuts
+  (symbolic links) to files kept elsewhere, for example an index by artist pointing into one
+  big collection, came up empty: only real files loaded. Links to songs and to folders are now
+  followed, a linked folder appears in the folder list, a link whose file is gone is skipped,
+  and a folder linked back into itself no longer keeps the scan going round forever. Thanks to
+  Jon Drews.
+
 ## [1.7.2] — 9. 11. 2026 — Songs end with the music, close buttons that work
 
 **In short**

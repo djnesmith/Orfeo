@@ -18,6 +18,7 @@ import { velocityDropRatio, suggestCompressorPreset } from '../utils/velocityAna
 import { applyHandColors, isHex, handHex, followedHandColor, DEFAULT_HAND_LH, DEFAULT_HAND_RH } from '../utils/handPalette'
 import { HAND_ASSIGN_GROUPS, focusRole } from '../utils/keyboardGroups'
 import type { TrackBaseline } from '../utils/unsavedChanges'
+import { restoreFrame, type Frame } from '../utils/settingsFrame'
 
 // ── Focus mode: every track's mute + eye from just before Focus went on, so
 // the second click puts back exactly what you had. Null while Focus is off.
@@ -250,6 +251,12 @@ interface OrfeoStore {
   // Where the Explorers were last dragged to; null until they are
   explorerPositions: { chord: { x: number; y: number } | null; scale: { x: number; y: number } | null }
   setExplorerPosition: (which: 'chord' | 'scale', pos: { x: number; y: number }) => void
+  // Where the Settings window was last placed and how big (screen px); null until it's moved or resized
+  settingsWindowFrame: Frame | null
+  setSettingsWindowFrame: (f: Frame | null) => void
+  // How the top bar shows the tempo: beats per minute, or speed in percent of the song's own
+  tempoDisplay: 'bpm' | 'percent'
+  setTempoDisplay: (v: 'bpm' | 'percent') => void
   noteEditorSoloTrackIndex: number | null
   preSoloTrackVisibility: boolean[] | null
   soloTrackForEdit: (index: number, opts?: { keepPlayhead?: boolean }) => void
@@ -897,6 +904,18 @@ export const useStore = create<OrfeoStore>((set, get) => ({
   setNoteEditorToolbarPos: (noteEditorToolbarX, noteEditorToolbarY) => set({ noteEditorToolbarX, noteEditorToolbarY }),
   explorerPositions: { chord: null, scale: null },
   setExplorerPosition: (which, pos) => set(s => ({ explorerPositions: { ...s.explorerPositions, [which]: pos } })),
+  settingsWindowFrame: null,
+  tempoDisplay: 'bpm',
+  // saved as it's set
+  setTempoDisplay: (tempoDisplay) => {
+    set({ tempoDisplay })
+    window.electronAPI?.setPrefs?.({ tempoDisplay })?.catch?.(() => {})
+  },
+  // saved as it's set: the window only sets it when a move or resize ends
+  setSettingsWindowFrame: (settingsWindowFrame) => {
+    set({ settingsWindowFrame })
+    window.electronAPI?.setPrefs?.({ settingsWindowFrame })?.catch?.(() => {})
+  },
 
   // ── Note Editor: track solo + first-run walkthrough ───────────────────────
   noteEditorSoloTrackIndex: null,
@@ -1277,6 +1296,8 @@ async function restoreLibraryPrefs() {
       const p = prefs.explorerPositions?.[which]
       if (typeof p?.x === 'number' && typeof p?.y === 'number') store.setExplorerPosition(which, { x: p.x, y: p.y })
     }
+    useStore.setState({ settingsWindowFrame: restoreFrame(prefs.settingsWindowFrame) })
+    if (prefs.tempoDisplay === 'bpm' || prefs.tempoDisplay === 'percent') useStore.setState({ tempoDisplay: prefs.tempoDisplay })
     if (typeof prefs.chordPrompterEnabled === 'boolean') store.setChordPrompterEnabled(prefs.chordPrompterEnabled)
     if (typeof prefs.chordTranscriptionEnabled === 'boolean') store.setChordTranscriptionEnabled(prefs.chordTranscriptionEnabled)
     if (typeof prefs.hideDemoFolder === 'boolean') store.setHideDemoFolder(prefs.hideDemoFolder)
