@@ -9,11 +9,14 @@ import SettingsWindow from './components/Settings/SettingsWindow'
 import { useUpdateService } from './hooks/useUpdateCheck'
 import { useSoundfontService } from './hooks/useSoundfonts'
 import EmptyState from './components/EmptyState'
-import { useStore } from './store'
+import { useStore, libraryRestored } from './store'
 import FloatingKeyboard from './components/Keyboard/FloatingKeyboard'
 import ChordExplorer from './components/ChordExplorer'
 import ScaleExplorer from './components/ScaleExplorer'
 import LockedChordModal from './components/LockedChordModal'
+import QueueEndCard from './components/QueueEndCard'
+import Tour from './components/Onboarding/Tour'
+import { registerQueueOpener, queueStep } from './utils/queueControl'
 import MidiEditor from './components/MidiEditor/MidiEditor'
 import MixerConsole from './components/Mixer/MixerConsole'
 import NoteEditorToolbar from './components/NoteEditor/NoteEditorToolbar'
@@ -42,8 +45,7 @@ import { runBeatGridTest } from './utils/beatGridTest'
 import { runTrackChordRoleTest } from './utils/trackChordRoleTest'
 import { runChordSequenceBuilderTest } from './utils/chordSequenceBuilderTest'
 import { runMidiDiagnosticsTest } from './utils/midiDiagnosticsTest'
-import { NES, confirmDiscardDirtyNoteEdits } from './utils/noteEditorState'
-import { confirmDiscardDirtyTempoKey, saveTempoKeyChanges } from './utils/tempoKeySave'
+import { NES } from './utils/noteEditorState'
 import { isTapCapturing, registerTap, cancelTap } from './utils/tapTempoSession'
 import { isCountingIn, cancelCountIn } from './utils/countInRunner'
 import { stepEvents } from './utils/stepThrough'
@@ -52,9 +54,11 @@ import { CountInOverlay } from './components/CountInOverlay'
 import { useSupportNoteService } from './hooks/useSupportNote'
 import { isExporting } from './audio/exportAudio'
 import { SupportNote } from './components/SupportNote'
+import { KeyboardRangePrompt } from './components/KeyboardRangePrompt'
+import './hooks/keyLightsOutput'  // the song's notes on lighted keyboards
 import { isTextEntry } from './utils/keyTarget'
 import { t } from './utils/i18n'
-import { confirmUnsavedChanges, willWarnAboutChanges } from './utils/unsavedPrompt'
+import { confirmSongAway, willWarnAboutChanges } from './utils/unsavedPrompt'
 
 export default function App() {
   // ── Update status + sound-set progress: one listener each for the app's
@@ -106,7 +110,7 @@ export default function App() {
   useEffect(() => {
     const onZoomChanged = ({ percent, capped }: { percent: number; capped: boolean }) => {
       if (zoomHintTimer.current) clearTimeout(zoomHintTimer.current)
-      setZoomHint(`Zoom ${percent}%${capped ? ' (max)' : ''}`)
+      setZoomHint(capped ? t`Zoom ${percent}% (max)` : t`Zoom ${percent}%`)
       zoomHintTimer.current = setTimeout(() => setZoomHint(null), 1000)
     }
     window.electronAPI.onZoomChanged(onZoomChanged)
@@ -123,12 +127,8 @@ export default function App() {
   const loadRequestIdRef = useRef(0)
   const loadFileIntoPlayer = useCallback(async (filePath: string) => {
     const requestId = ++loadRequestIdRef.current
-    const canDiscard = await confirmDiscardDirtyNoteEdits('Save changes before opening this file?')
-    if (!canDiscard || requestId !== loadRequestIdRef.current) return
-    const canDiscardTempoKey = await confirmDiscardDirtyTempoKey('Save tempo/key changes before opening this file?')
-    if (!canDiscardTempoKey || requestId !== loadRequestIdRef.current) return
-    const canLoseChanges = await confirmUnsavedChanges()
-    if (!canLoseChanges || requestId !== loadRequestIdRef.current) return
+    const canGo = await confirmSongAway(t`Save your changes before opening this file?`, t`Open Without Saving`, t`Save All & Open`)
+    if (!canGo || requestId !== loadRequestIdRef.current) return
 
     const proceed = await confirmPendingImportBeforeSwitch(filePath)
     if (!proceed || requestId !== loadRequestIdRef.current) return // user cancelled — stay on current file
@@ -147,7 +147,7 @@ export default function App() {
       resolvedFilePath = resolved.filePath
       parseName = resolved.fileName
     } catch (e: any) {
-      showDropError(e?.message ?? 'Could not convert this file to MIDI.')
+      showDropError(e?.message ?? t`Could not convert this file to MIDI.`)
       return
     }
     if (requestId !== loadRequestIdRef.current) return
@@ -200,9 +200,45 @@ export default function App() {
       await loadFileIntoPlayer(destPath)
     } catch (err) {
       console.error('[Orfeo] copyMidiToLibrary failed:', err)
-      showDropError('Could not copy file into library.')
+      showDropError(t`Could not copy file into library.`)
     }
   }, [stop, showDropError, loadFileIntoPlayer])
+
+  // ── Open with Orfeo: a song double-clicked in the system ──────────────────
+  // Opens where it lives, or, with "Add to Library on double click" on, is
+  // copied into the Library first exactly as a dropped file is. The double
+  // click was the choice, so no "replace the open file?" question; the unsaved
+  // changes warning still comes first. A song from launch waits until the
+  // saved Library is back, so it opens with the same settings as any other.
+  // ── Practice queue: how a queued song is opened (the usual way, so the unsaved
+  // changes warning still comes first) and started; used by ↓ / ↑, the queue's
+  // buttons and the end-of-song card (utils/queueControl.ts) ──
+  const queueOpenRef = useRef<(path: string, autoplay: boolean) => Promise<void>>(async () => {})
+  queueOpenRef.current = async (path: string, autoplay: boolean) => {
+    stop()
+    await loadFileIntoPlayer(path)
+    const open = (useStore.getState().midi as any)?._filePath as string | undefined
+    const same = !!open && open.replace(/\\/g, '/').toLowerCase() === path.replace(/\\/g, '/').toLowerCase()
+    // a moment for the new song's sound to load before it starts
+    if (autoplay && same) setTimeout(() => { void play() }, 350)
+  }
+  useEffect(() => {
+    registerQueueOpener((path, autoplay) => queueOpenRef.current(path, autoplay))
+    return () => registerQueueOpener(null)
+  }, [])
+  const replaySong = useCallback(() => { stop(); setTimeout(() => { void play() }, 150) }, [stop, play])
+
+  const openWithRef = useRef<(filePath: string) => void>(() => {})
+  openWithRef.current = (filePath: string) => {
+    if (useStore.getState().openWithAddsToLibrary) { void loadDroppedFilePath(filePath); return }
+    stop(); void loadFileIntoPlayer(filePath)
+  }
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.takeOpenWithFile) return
+    api.onOpenWithFile(filePath => openWithRef.current(filePath))
+    void libraryRestored.then(() => api.takeOpenWithFile()).then(filePath => { if (filePath) openWithRef.current(filePath) })
+  }, [])
 
   // ── Validate that a DataTransfer item is a supported file format ─────────────
   function isSupportedFile(file: File): boolean {
@@ -241,7 +277,7 @@ export default function App() {
     if (!file) return
 
     if (!isSupportedFile(file)) {
-      showDropError('Unsupported file type. Orfeo accepts .mid, .musicxml, .mxl, .gp/.gp5, .cap, and .kar files.')
+      showDropError(t`Unsupported file type. Orfeo accepts .mid, .musicxml, .mxl, .gp/.gp5, .cap, and .kar files.`)
       return
     }
 
@@ -253,8 +289,8 @@ export default function App() {
       const fileName = filePath.replace(/\\/g, '/').split('/').pop() ?? filePath
       const label    = fileName.length > 40 ? fileName.slice(0, 37) + '…' : fileName
       const choice   = await confirmDialog({
-        message: `Load "${label}"? This will replace the currently open file.`,
-        buttons: ['Load File', 'Cancel'],
+        message: t`Load "${label}"? This will replace the currently open file.`,
+        buttons: [t`Load File`, t`Cancel`],
       })
       if (choice === 0) await loadDroppedFilePath(filePath)
     } else {
@@ -284,61 +320,24 @@ export default function App() {
   // the app open (user cancelled one of the dialogs).
   useEffect(() => {
     const handler = async () => {
-      // 1. Note Editor unsaved changes
-      if (NES.dirty) {
-        const choice = await confirmDialog({
-          title: 'Unsaved Changes',
-          message: 'You have unsaved changes in the Note Editor.',
-          buttons: ['Save', 'Discard', 'Cancel'],
-        })
-        if (choice === 2) return  // Cancel — leave app open
-        if (choice === 0) {
-          const ok = await NES.onSaveRequest?.()
-          if (!ok) return         // save failed or cancelled — leave app open
-        }
-        // Discard (1) or successful save — fall through
-      }
+      // 1. Every change to the song, in one window (the save badge's list)
+      if (!(await confirmSongAway(t`Save your changes before Orfeo closes?`, t`Close Without Saving`, t`Save All & Close`))) return
 
-      // 2. Tempo/Key unsaved changes (only if the Settings toggle is on)
-      {
-        const s = useStore.getState()
-        const tempoKeyDirty = s.saveTempoKeyChangesEnabled && !!s.midi &&
-          (s.bpm !== s.originalBpm || (s.detectedKey?.transpose ?? 0) !== 0)
-        if (tempoKeyDirty) {
-          const choice = await confirmDialog({
-            title: 'Unsaved Tempo/Key Changes',
-            message: 'You have unsaved tempo/key changes.',
-            buttons: ['Save', 'Discard', 'Cancel'],
-          })
-          if (choice === 2) return  // Cancel — leave app open
-          if (choice === 0) {
-            const ok = await saveTempoKeyChanges()
-            if (!ok) return
-          }
-        }
-      }
-
-      // 3. Pending imported file (MusicXML/GP converted but not yet saved as .mid)
+      // 2. Pending imported file (MusicXML/GP converted but not yet saved as .mid)
       const pending = useStore.getState().pendingImportedFile
       if (pending) {
         const libraryFolder = (useStore.getState() as any).libraryFolder as string | null ?? null
         const cachePath = getCachePath(pending.sourcePath, libraryFolder)
         const choice = await confirmDialog({
-          message: `Save imported file "${pending.fileName}" as a MIDI file?`,
-          detail: `The original file is never modified.`,
-          buttons: ['Save as MID', "Don't Save", 'Cancel'],
+          message: t`Save imported file "${pending.fileName}" as a MIDI file?`,
+          detail: t`The original file is never modified.`,
+          buttons: [t`Save as MID`, t`Don't Save`, t`Cancel`],
         })
         if (choice === 2) return  // Cancel — leave app open
         if (choice === 0) {
           await (window.electronAPI as any).writeCachedImport(cachePath, pending.midiBase64)
         }
         useStore.getState().setPendingImportedFile(null)
-      }
-
-      // 4. Track, Mixer and Playback Editor changes: a warning for now, no saving from here
-      {
-        const go = await confirmUnsavedChanges(t`These changes to the song will be lost when Orfeo closes:`, t`Close Without Saving`)
-        if (!go) return  // Cancel — leave app open
       }
 
       // Nothing left pending — tell main process it is safe to close
@@ -373,10 +372,10 @@ export default function App() {
     const { noteEditorActive } = useStore.getState()
     if (noteEditorActive && NES.dirty) {
       const choice = await confirmDialog({
-        title: 'Unsaved Changes',
-        message: 'Save note editor changes before entering Presentation Mode?',
-        detail: 'Your edits will be preserved in the file.',
-        buttons: ['Save', 'Discard', 'Cancel'],
+        title: t`Unsaved Changes`,
+        message: t`Save note editor changes before entering Presentation Mode?`,
+        detail: t`Your edits will be preserved in the file.`,
+        buttons: [t`Save`, t`Discard`, t`Cancel`],
       })
       if (choice === 2) return
       if (choice === 0) {
@@ -434,6 +433,18 @@ export default function App() {
           if (!s.stepThroughEnabled || !s.midi || s.chordExplorerOpen || s.scaleExplorerOpen || s.lockedChordModalOpen || s.tapSession || isCountingIn()) break
           e.preventDefault()
           stepEvents(e.key === 'ArrowRight' ? 1 : -1, e.shiftKey)
+          break
+        }
+        case 'ArrowDown':
+        case 'ArrowUp': {
+          // Alt + ↓ / ↑ go to the next / previous song in the practice queue (Option on a
+          // Mac). With Alt, so plain arrows keep scrolling a list you've clicked into. A
+          // focused fader or knob uses the arrows itself, so leave those alone.
+          if (!e.altKey || e.defaultPrevented || e.ctrlKey || e.metaKey || e.shiftKey) break
+          if ((e.target as HTMLElement | null)?.closest?.('[role="slider"], input[type="range"], select, [contenteditable="true"]')) break
+          const s = useStore.getState()
+          if (s.chordExplorerOpen || s.scaleExplorerOpen || s.lockedChordModalOpen || s.tapSession || isCountingIn()) break
+          if (queueStep(e.key === 'ArrowDown' ? 1 : -1)) e.preventDefault()
           break
         }
         case 'Escape':
@@ -605,13 +616,15 @@ export default function App() {
       <ChordExplorer />
       <ScaleExplorer />
       <LockedChordModal />
+      <QueueEndCard replay={replaySong} />
+      <Tour />
 
       {/* ── Drop error toast — briefly shown for invalid file types. Click-to-
           dismiss alongside the 2.5s auto-clear timeout — if the user's eyes
           were on the file they dropped rather than this bottom-center toast,
           the explanation could otherwise vanish before it's read. ────────── */}
       {dropError && (
-        <Tooltip title="Dismiss" description="Click anywhere on this message to close it.">
+        <Tooltip title={t`Dismiss`} description={t`Click anywhere on this message to close it.`}>
         <div
           role="alert"
           onClick={() => {
@@ -650,6 +663,7 @@ export default function App() {
       )}
 
       <SupportNote />
+      <KeyboardRangePrompt />
 
       {/* ── Mixer Console — floating modal, toggled via Ctrl+Shift+M or Console drawer icon ── */}
       <MixerConsole />

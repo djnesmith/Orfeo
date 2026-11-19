@@ -7,15 +7,10 @@ import MasterStrip from './MasterStrip'
 import OrfeoMark from '../OrfeoMark'
 import { getPianoRollCenterX, getKeyboardHeaderTop } from '../../utils/modalAnchors'
 import { modalCloseButtonStyle, modalCloseButtonHoverColor, modalCloseButtonIdleColor } from '../../utils/modalCloseButtonStyle'
-import { confirmDialog } from '../../utils/confirmController'
-import { parseMidiBuffer } from '../../utils/midiParser'
-import { songKey } from '../../utils/songIdentity'
-import { carryCorrection } from '../../utils/tempoCorrection'
-import { detectKeyFromTracks, parseKeySignature } from '../../utils/keyDetection'
 import { KEYBOARD_GROUPS } from '../../utils/keyboardGroups'
 import { useFocusTrap } from '../../hooks/useFocusTrap'
 import { useClampPositionOnZoom } from '../../hooks/useClampPositionOnZoom'
-import { acceptMixerValues } from '../../utils/unsavedChanges'
+import { t } from '../../utils/i18n'
 
 // ── MixerConsole — floating draggable modal ───────────────────────────────────
 // Opened via Ctrl+Shift+M or the Console (SlidersVertical) icon in the TrackPanel.
@@ -85,59 +80,10 @@ export default function MixerConsole() {
     })
   }, [mixerOpen])
 
-  // ── Close — diffs live channel values against the file-load baseline; if any
-  // channel's volume/pan/reverb/chorus changed, offers to save before closing.
-  // Save writes a new _ORFEO_vN file (same versioning as editor:save) and
-  // switches the app to it; Discard drops the changes; Cancel keeps the mixer
-  // open. Nothing to diff (Master strip, mute/solo/etc.) — those stay session-only. ──
-  const requestClose = useCallback(async () => {
-    const { tracks: liveTracks, mixerBaseline, midi } = useStore.getState()
-    const changed = liveTracks.filter(t => {
-      const base = mixerBaseline[t.index]
-      return base && (base.volume !== t.volume || base.pan !== t.pan || base.chorus !== t.chorus || base.reverb !== t.reverb)
-    })
-    if (changed.length === 0 || !midi) { setMixerOpen(false); return }
-
-    const filePath = (midi as any)._filePath ?? ''
-    const choice = await confirmDialog({
-      title: 'Save mixer changes?',
-      message: `Volume, pan, reverb, and chorus were changed for ${changed.length} channel(s).`,
-      buttons: ['Save & Reload', 'Discard', 'Cancel'],
-    })
-    if (choice === 2) return // Cancel — leave mixer open
-    if (choice === 1) { // Discard — re-seeded from file next open
-      useStore.setState(s => ({ mixerBaseline: acceptMixerValues(s.tracks, s.mixerBaseline) }))
-      setMixerOpen(false)
-      return
-    }
-
-    try {
-      const result = await window.electronAPI.saveMixerChannels({
-        filePath,
-        channels: changed.map(t => ({ index: t.index, volume: t.volume, pan: t.pan, chorus: t.chorus, reverb: t.reverb })),
-      })
-      if (!result.ok || !result.base64 || !result.fileName || !result.filePath) {
-        await confirmDialog({ title: 'Save failed', message: result.message ?? 'Could not save mixer changes.', buttons: ['OK'] })
-        return // leave mixer open so the user can retry
-      }
-      const binary = atob(result.base64)
-      const bytes  = new Uint8Array(binary.length)
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-      const parsed = parseMidiBuffer(bytes.buffer, result.fileName, result.filePath)
-      // keep the song's tap-tempo correction on the saved version (timing unchanged)
-      const moved = carryCorrection(useStore.getState().tempoCorrections, useStore.getState().songKey, songKey(bytes.buffer), 1)
-      if (moved) useStore.setState({ tempoCorrections: moved })
-      useStore.getState().setMidi(parsed)
-      const raw = parsed as any
-      useStore.getState().setDetectedKey(
-        raw._keySignature ? parseKeySignature(raw._keySignature.key, raw._keySignature.scale) : detectKeyFromTracks(parsed.tracks),
-      )
-      useStore.getState().notifyLibrarySaved(result.filePath)
-      setMixerOpen(false)
-    } catch (e: any) {
-      await confirmDialog({ title: 'Save failed', message: e?.message ?? 'Could not save mixer changes.', buttons: ['OK'] })
-    }
-  }, [setMixerOpen])
+  // ── Close — never asks. Changed channels stay as they sound and the save
+  // badge in the top bar counts them: save them there (or with Save all), or
+  // when the song goes away. ─────────────────────────────────────────────────
+  const requestClose = useCallback(() => setMixerOpen(false), [setMixerOpen])
 
   // ── Drag-to-reorder — session-only display order, never written to the file.
   // Piano/keys always stays pinned first — group drag is simply disabled for
@@ -336,7 +282,7 @@ export default function MixerConsole() {
       ref={modalRef}
       role="dialog"
       aria-modal="true"
-      aria-label="Console Mixer"
+      aria-label={t`Console Mixer`}
       className="orfeo-modal-glow app-no-drag"
       onMouseDown={() => setZIndex(bringToFront())}
       style={{
@@ -386,7 +332,7 @@ export default function MixerConsole() {
           color: 'var(--text-amber)', letterSpacing: '0.14em', textTransform: 'uppercase',
           flexShrink: 0,
         }}>
-          Console Mixer
+          {t`Console Mixer`}
         </span>
 
         {/* ── Permanent description — centered in whatever space is left between
@@ -412,7 +358,7 @@ export default function MixerConsole() {
               ...(headerDescOverflow > 0 ? { '--marquee-distance': `-${headerDescOverflow}px` } as CSSProperties : {}),
             }}
           >
-            Adjust track levels, apply effects and compress overall loudness
+            {t`Adjust track levels, apply effects and compress overall loudness`}
           </span>
         </div>
 
@@ -460,7 +406,7 @@ export default function MixerConsole() {
               color: 'var(--text-dimmest)', fontSize: 12, fontFamily: 'var(--font-mono)',
               letterSpacing: '0.08em', textTransform: 'uppercase',
             }}>
-              No tracks — load a MIDI file
+              {t`No tracks — load a MIDI file`}
             </div>
           ) : (
             displayTracks.map(t => {

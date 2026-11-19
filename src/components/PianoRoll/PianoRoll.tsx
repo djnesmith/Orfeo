@@ -3,19 +3,21 @@ import { Application, Graphics } from 'pixi.js'
 import type { Track } from '@tonejs/midi'
 import { useStore } from '../../store'
 import { isBlackKey } from '../../utils/midiParser'
-import { buildKeyLayout, PIANO_RANGES as RANGES, type KeyLayout } from '../../utils/keyLayout'
+import { buildKeyLayoutViewPx, type KeyLayout, type KeyView } from '../../utils/keyLayout'
+import { startKeyView, foldRange, foldIntoRange } from '../../utils/keyView'
 import { NES } from '../../utils/noteEditorState'
 import {
   cmdAddNote, cmdRemoveNotes, cmdSetRangeVelocity, midiToEditableCopy, copyHandTagsOntoEditBuffer,
   type ToneNote,
 } from '../../utils/noteEditorCommands'
-import { getNoteLabel } from '../../utils/noteNames'
+import { noteLabelText, resolveSa } from '../../utils/noteNames'
 import { PENCIL_CURSOR } from '../../utils/cursors'
 import type { Hand } from '../../types'
 import { HAND_LH_CSS, HAND_RH_CSS } from '../../utils/handColors'
 import { HitEffectsRenderer } from './HitEffects'
 import { drainHitEffects } from '../../utils/hitEffectQueue'
 import { isShown } from '../../utils/trackShown'
+import { t } from '../../utils/i18n'
 
 const VISIBLE_SECONDS  = 6
 const NOTE_RADIUS      = 3
@@ -214,6 +216,7 @@ function LoopOverlay() {
   const zoomLevel          = useStore(s => s.zoomLevel)
   const noteEditorActive   = useStore(s => s.noteEditorActive)
   const midi               = useStore(s => s.midi)
+  const checkingHands      = useStore(s => s.handCheck !== null)
 
   const overlayRef  = useRef<HTMLDivElement>(null)
   const draggingRef = useRef<'start' | 'end' | null>(null)
@@ -323,8 +326,19 @@ function LoopOverlay() {
   // (a hint, so it follows Settings › Appearance › Tooltips; this redraws on every mouse move anyway)
   const showTooltip = !!midi && !noteEditorActive && hasSelection && mousePos !== null && useStore.getState().tooltipsEnabled
 
-  // Edit mode disables loop overlay pointer events to pass them to PixiJS
-  if (noteEditorActive) return null
+  // Edit mode disables loop overlay pointer events to pass them to PixiJS.
+  // While checking hands passage by passage, the passage's loop still shows,
+  // display only, so the notes underneath stay editable.
+  if (noteEditorActive) {
+    if (!checkingHands || !hasSelection || heightPct <= 0) return null
+    return (
+      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>
+        <div style={{ position: 'absolute', left: 0, right: 0, top: `${topPct}%`, height: `${heightPct}%`, background: amberFill }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: `${topPct}%`, height: 2, background: amber }} />
+        <div style={{ position: 'absolute', left: 0, right: 0, top: `calc(${botPct}% - 2px)`, height: 2, background: amber }} />
+      </div>
+    )
+  }
 
   return (
     <div
@@ -379,10 +393,10 @@ function LoopOverlay() {
             textTransform: 'uppercase', letterSpacing: '0.08em',
             color: 'var(--accent-amber-tooltip-text)',
           }}>
-            Loop region set
+            {t`Loop region set`}
           </span>
           <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, color: 'var(--text-tooltip-secondary)' }}>
-            Drag to reorder, right-click to clear
+            {t`Drag to reorder, right-click to clear`}
           </span>
         </div>
       )}
@@ -407,7 +421,9 @@ export default function PianoRoll() {
   // something drawFrame actually reads has changed, instead of unconditionally
   // every tick. Starts true so the first tick performs the initial draw.
   const dirtyRef          = useRef(true)
-  const lastKeySizeRef    = useRef<number>(0)
+  // the key view the grid was last drawn for ("v0/vw/lo/hi"): it glides
+  // between keyboard sizes (utils/keyView.ts), and the grid follows it
+  const lastKeySizeRef    = useRef<string>('')
   const lastMidiRef       = useRef<any>(null)
   const flatNotesRef      = useRef<FlatNote[]>([])
   // ── Tracks whose notes are ALL the same hand — i.e. a genuine "split into
@@ -456,6 +472,8 @@ export default function PianoRoll() {
       s.zoomLevel !== prev.zoomLevel ||
       s.appTheme !== prev.appTheme ||
       s.keyboardSize !== prev.keyboardSize ||
+      s.keyboardOctave !== prev.keyboardOctave ||
+      s.keyView !== prev.keyView ||
       s.showBarNumbers !== prev.showBarNumbers ||
       s.barStarts !== prev.barStarts ||
       s.noteEditorActive !== prev.noteEditorActive ||
@@ -736,9 +754,9 @@ export default function PianoRoll() {
       }
 
       // ── Static grid: black key shading + octave dividers ──────────────────
-      const drawGrid = (W: number, H: number, midiMin: number, midiMax: number) => {
+      const drawGrid = (W: number, H: number, view: KeyView, midiMin: number, midiMax: number) => {
         grid.clear()
-        keyLayoutRef.current = buildKeyLayout(W, midiMin, midiMax)
+        keyLayoutRef.current = buildKeyLayoutViewPx(W, view, midiMin, midiMax)
         const kl = keyLayoutRef.current
 
         for (let m = midiMin; m <= midiMax; m++) {
@@ -786,9 +804,8 @@ export default function PianoRoll() {
         app.renderer.resize(cw, ch, dpr)
         lastSizeW = cw; lastSizeH = ch; lastSizeDpr = dpr
 
-        const { keyboardSize: ks } = storeRef.current
-        const { min: syncMin, max: syncMax } = RANGES[ks] ?? RANGES[88]
-        drawGrid(cw, ch, syncMin, syncMax)
+        const { keyView: syncView, keyViewLo: syncMin, keyViewHi: syncMax } = storeRef.current
+        drawGrid(cw, ch, syncView, syncMin, syncMax)
 
         if (overlayCanvasRef.current) {
           const oc = overlayCanvasRef.current
@@ -837,7 +854,7 @@ export default function PianoRoll() {
           applyResize(cw, ch, dpr)
         }
 
-        const { midi, currentTime, tracks, detectedKey, zoomLevel, appTheme, keyboardSize, showBarNumbers, barStarts: storeBars, noteEditorActive, showHandLabels, playbarVisible, keyboardTopY, hitEffectsEnabled, hitEffectPattern, hitEffectBloomThreshold, hitEffectBloomIntensity, hitEffectBloomSpread, hitEffectColor } = storeRef.current
+        const { midi, currentTime, tracks, detectedKey, zoomLevel, appTheme, keyboardSize, keyboardOctave, keyView, keyViewLo, keyViewHi, showBarNumbers, barStarts: storeBars, noteEditorActive, showHandLabels, playbarVisible, keyboardTopY, hitEffectsEnabled, hitEffectPattern, hitEffectBloomThreshold, hitEffectBloomIntensity, hitEffectBloomSpread, hitEffectColor } = storeRef.current
         const transpose   = (detectedKey as any)?.transpose ?? 0
         const W = app.screen.width, H = app.screen.height
         // ── Hit-line Y position — fixed 80% line by default (unchanged), or the
@@ -854,12 +871,16 @@ export default function PianoRoll() {
           const rect = el.getBoundingClientRect()
           py = Math.max(20, Math.min(H - 4, keyboardTopY - rect.top))
         }
-        const { min: midiMin, max: midiMax } = RANGES[keyboardSize] ?? RANGES[88]
+        const midiMin = keyViewLo, midiMax = keyViewHi
         const totalKeys   = midiMax - midiMin + 1
+        // portable keyboards: notes past the edges move onto them by octaves,
+        // fainter (never in the Note Editor, where a note must sit on its own key)
+        const fold = noteEditorActive ? null : foldRange({ keyboardSize, keyboardOctave })
 
-        if (keyboardSize !== lastKeySizeRef.current) {
-          lastKeySizeRef.current = keyboardSize
-          drawGrid(W, H, midiMin, midiMax)
+        const viewKey = `${keyView.v0}/${keyView.vw}/${midiMin}/${midiMax}`
+        if (viewKey !== lastKeySizeRef.current) {
+          lastKeySizeRef.current = viewKey
+          drawGrid(W, H, keyView, midiMin, midiMax)
         }
 
         // ── Note-hit visual effects (Phase 2) — spawn from the same trigger as
@@ -876,7 +897,8 @@ export default function PianoRoll() {
           // per-track color (and the key glow, a separate render path) untouched.
           const overrideHex = hitEffectColor ? parseInt(hitEffectColor.replace('#', ''), 16) : null
           for (const hit of hits) {
-            const idx = hit.midi - midiMin
+            const hm = fold && (hit.midi < fold.min || hit.midi > fold.max) ? foldIntoRange(hit.midi, fold.min, fold.max) : hit.midi
+            const idx = hm - midiMin
             if (idx < 0 || idx >= totalKeys) continue
             const key = keyLayoutRef.current[idx]
             if (!key) continue
@@ -1005,7 +1027,13 @@ export default function PianoRoll() {
           const ts = trackMap.get(note.trackIndex)
           if (ts && !isShown(ts, hasSolo)) continue   // what shows: eye, mute and solo (trackShown.ts)
 
-          const idx = (note.midi + transpose) - midiMin
+          let shownMidi = note.midi + transpose
+          let folded = false
+          if (fold && (shownMidi < fold.min || shownMidi > fold.max)) {
+            shownMidi = foldIntoRange(shownMidi, fold.min, fold.max)
+            folded = true
+          }
+          const idx = shownMidi - midiMin
           if (idx < 0 || idx >= totalKeys) continue
           const key = keyLayoutRef.current[idx]
           if (!key) continue
@@ -1043,9 +1071,9 @@ export default function PianoRoll() {
 
           const drawW = Math.max(key.width - 2, 1)
           notes.roundRect(key.x + 1, topY, drawW, noteH, NOTE_RADIUS)
-          notes.fill({ color, alpha: 0.9 })
+          notes.fill({ color, alpha: folded ? 0.4 : 0.9 })
           notes.rect(key.x + 1, topY, drawW, 2)
-          notes.fill({ color: NOTE_HIGHLIGHT_COLOR, alpha: 0.25 })
+          notes.fill({ color: NOTE_HIGHLIGHT_COLOR, alpha: folded ? 0.12 : 0.25 })
 
           // ── Non-color hand signal — a thin edge accent (left = LH, right =
           // RH), not a hue, so a colorblind user keeps the hand cue during
@@ -1063,7 +1091,8 @@ export default function PianoRoll() {
 
         // ── Note names in edit mode (Canvas2D over the PixiJS canvas) ───────
         if (noteEditorActive && NES.showNoteNamesRef.current && ctx && ov) {
-          const { noteNaming, accidentals } = storeRef.current
+          const { noteNaming, accidentals, sargam, detectedKey } = storeRef.current
+          const sg = { sa: resolveSa(sargam.sa, detectedKey), script: sargam.script }
           ctx.save()
           ctx.font = `9px ${FONT_MONO_STR}`
           ctx.textAlign = 'center'
@@ -1071,7 +1100,7 @@ export default function PianoRoll() {
           ctx.fillStyle = NOTE_LABEL_COLOR
           for (const ef of editFlatNotes) {
             if (ef.noteH < 14) continue
-            const label = getNoteLabel(ef.note.midi, noteNaming, accidentals).replace(/\d+$/, '')
+            const label = noteLabelText(ef.note.midi, noteNaming, accidentals, sg)
             if (!label) continue
             ctx.fillText(label, ef.key.x + ef.key.width / 2, ef.topY + ef.noteH / 2)
           }
@@ -1135,12 +1164,12 @@ export default function PianoRoll() {
       }
 
       const getViewParams = () => {
-        const { currentTime, zoomLevel, keyboardSize, detectedKey } = storeRef.current
+        const { currentTime, zoomLevel, keyViewLo, keyViewHi, detectedKey } = storeRef.current
         const H = app.screen.height
         const py = H * PLAYHEAD_RATIO
         const visibleSecs = VISIBLE_SECONDS / (zoomLevel ?? 1)
         const pps = py / visibleSecs
-        const { min: midiMin, max: midiMax } = RANGES[keyboardSize] ?? RANGES[88]
+        const midiMin = keyViewLo, midiMax = keyViewHi
         const transpose = (detectedKey as any)?.transpose ?? 0
         return { currentTime, py, pps, midiMin, midiMax, transpose }
       }
@@ -1177,15 +1206,15 @@ export default function PianoRoll() {
             const atStart = canResize && cy >= ef.topY + ef.noteH - RESIZE_ZONE_PX
             if (atEnd || atStart) {
               app.canvas.style.cursor = 'ns-resize'
-              hint = 'Drag to resize'
+              hint = t`Drag to resize`
               setEditTooltip(null)
             } else {
               app.canvas.style.cursor = 'move'
-              hint = 'Drag to move · Shift+click to add to selection'
+              hint = t`Drag to move · Shift+click to add to selection`
               if (NES.showNoteNamesRef.current && ef.noteH < 14 && clientX !== undefined && clientY !== undefined) {
-                const { noteNaming, accidentals } = storeRef.current
+                const { noteNaming, accidentals, sargam, detectedKey } = storeRef.current
                 const naming = noteNaming === 'hidden' ? 'english' : noteNaming
-                const label  = getNoteLabel(ef.note.midi, naming, accidentals).replace(/\d+$/, '')
+                const label  = noteLabelText(ef.note.midi, naming, accidentals, { sa: resolveSa(sargam.sa, detectedKey), script: sargam.script })
                 setEditTooltip({ x: clientX, y: clientY, label })
               } else {
                 setEditTooltip(null)
@@ -1193,26 +1222,26 @@ export default function PianoRoll() {
             }
           } else if (tool === 'pen') {
             app.canvas.style.cursor = PENCIL_CURSOR
-            hint = 'Click to mark for delete · Right-click for options'
+            hint = t`Click to mark for delete · Right-click for options`
             setEditTooltip(null)
           } else {
             app.canvas.style.cursor = 'crosshair'
-            hint = 'Click to select · Right-click for options'
+            hint = t`Click to select · Right-click for options`
             setEditTooltip(null)
           }
         } else {
           if (tool === 'select') {
             app.canvas.style.cursor = 'grab'
-            hint = 'Drag to pan · Shift+wheel to scrub finely'
+            hint = t`Drag to pan · Shift+wheel to scrub finely`
           } else if (tool === 'pen') {
             app.canvas.style.cursor = PENCIL_CURSOR
             hint = 'Alt+click to add a note'
           } else if (tool === 'marquee') {
             app.canvas.style.cursor = 'crosshair'
-            hint = 'Drag to select a cluster'
+            hint = t`Drag to select a cluster`
           } else {
             app.canvas.style.cursor = 'crosshair'
-            hint = 'Drag through notes to select them'
+            hint = t`Drag through notes to select them`
           }
           setEditTooltip(null)
         }
@@ -1726,34 +1755,34 @@ export default function PianoRoll() {
         if (hasSelection) {
           if (NES.reassignHandsMode) {
             options.push({
-              label: 'Assign to Left Hand',
+              label: t`Assign to Left Hand`,
               swatchColor: 'var(--hand-lh)',
               onClick: () => { assignSelectedHand('L'); setContextMenu(null) },
             })
             options.push({
-              label: 'Assign to Right Hand',
+              label: t`Assign to Right Hand`,
               swatchColor: 'var(--hand-rh)',
               onClick: () => { assignSelectedHand('R'); setContextMenu(null) },
             })
           }
           if (editSelectedNotes.size >= 2) {
             options.push({
-              label: `Flatten Velocity (${editSelectedNotes.size} notes)`,
+              label: t`Flatten Velocity (selected notes: ${editSelectedNotes.size})`,
               onClick: () => { flattenSelectedVelocity(); setContextMenu(null) },
             })
           }
           options.push({
-            label: 'Deselect',
+            label: t`Deselect`,
             onClick: () => { editSelectedNotes.clear(); setContextMenu(null) },
           })
         }
-        options.push({ label: 'Undo', disabled: !NES.history.canUndo, onClick: () => { doHistoryUndo(); setContextMenu(null) } })
-        options.push({ label: 'Redo', disabled: !NES.history.canRedo, onClick: () => { doHistoryRedo(); setContextMenu(null) } })
+        options.push({ label: t`Undo`, disabled: !NES.history.canUndo, onClick: () => { doHistoryUndo(); setContextMenu(null) } })
+        options.push({ label: t`Redo`, disabled: !NES.history.canRedo, onClick: () => { doHistoryRedo(); setContextMenu(null) } })
         // Delete always last — destructive action shouldn't be the first
         // thing a right-click reaches for.
         if (hasSelection) {
           options.push({
-            label: editSelectedNotes.size === 1 ? 'Delete note' : `Delete ${editSelectedNotes.size} notes`,
+            label: editSelectedNotes.size === 1 ? t`Delete note` : t`Delete selected notes (${editSelectedNotes.size})`,
             destructive: true,
             onClick: () => { deleteSelectedNotes(); setContextMenu(null) },
           })
@@ -1881,7 +1910,7 @@ export default function PianoRoll() {
         ctx.textBaseline = 'alphabetic'
         ctx.save()
         ctx.letterSpacing = '0.1em' as any
-        ctx.fillText('VELOCITY EDITOR', W / 2, HEADER_H / 2 + 4)
+        ctx.fillText(t`VELOCITY EDITOR`, W / 2, HEADER_H / 2 + 4)
         ctx.restore()
 
         if (noteEditorSoloTrackIndex === null) {
@@ -1891,7 +1920,7 @@ export default function PianoRoll() {
           ctx.font = `11px ${FONT_MONO_STR}`
           ctx.textAlign = 'center'
           ctx.textBaseline = 'middle'
-          ctx.fillText('Solo a track to edit its velocity in the Tracks panel on the right', W / 2, H / 2)
+          ctx.fillText(t`Solo a track to edit its velocity in the Tracks panel on the right`, W / 2, H / 2)
           ctx.globalAlpha = 1
           return
         }
@@ -2008,7 +2037,7 @@ export default function PianoRoll() {
       }
       // ── Hover/drag label — "Velocity 96" next to the cursor (same label the
       // main roll uses for notes); a group drag shows the grabbed bar's value
-      const velLabel = (n: ToneNote) => `Velocity ${Math.round(Math.max(0, Math.min(1, n.velocity)) * 127)}`
+      const velLabel = (n: ToneNote) => t`Velocity ${Math.round(Math.max(0, Math.min(1, n.velocity)) * 127)}`
       const onVelPointerMove = (e: PointerEvent) => {
         const canvas = velocityCanvasRef.current
         if (!canvas) return
@@ -2092,7 +2121,7 @@ export default function PianoRoll() {
         if (!storeRef.current.noteEditorActive) return
         setEditTooltip(null)
         const n = editSelectedNotes.size
-        const hint = n > 0 ? `${n} note${n === 1 ? '' : 's'} selected · Right-click for options` : NES.defaultHint
+        const hint = n > 0 ? t`Notes selected: ${n} · Right-click for options` : NES.defaultHint
         if (NES.hoverHint !== hint) {
           NES.hoverHint = hint
           NES.onHintChange?.()
@@ -2115,8 +2144,11 @@ export default function PianoRoll() {
       velCanvas.addEventListener('pointerleave',  onVelPointerLeave)
 
       // ── Initial draw ──────────────────────────────────────────────────────
-      const { keyboardSize } = useStore.getState()
-      lastKeySizeRef.current = keyboardSize
+      startKeyView()
+      {
+        const { keyView: v, keyViewLo: lo, keyViewHi: hi } = useStore.getState()
+        lastKeySizeRef.current = `${v.v0}/${v.vw}/${lo}/${hi}`
+      }
       applyResize(el.clientWidth || 800, el.clientHeight || 600, window.devicePixelRatio || 1)
       // Redraw every tick during playback or note editing (both need continuous
       // animation — scrolling playhead, drag previews, selection pulse). Otherwise
@@ -2204,7 +2236,7 @@ export default function PianoRoll() {
       {contextMenu && (
         <div
           role="menu"
-          aria-label="Note actions"
+          aria-label={t`Note actions`}
           onMouseDown={e => e.stopPropagation()}
           style={{
             position: 'fixed',

@@ -1,7 +1,8 @@
-import { AudioLines, Timer, TriangleAlert, ListOrdered, Hand, Repeat, Focus, Pause, SkipForward, Gauge } from 'lucide-react'
+import { AudioLines, Timer, TriangleAlert, Save, Hand, Repeat, Focus, Pause, SkipForward, Gauge, ArrowUpRight } from 'lucide-react'
+import { Numbers } from '../../../utils/extraIcons'
 import { useStore } from '../../../store'
 import { t } from '../../../utils/i18n'
-import { Switch, OptionBtn, FingerStepper, InlineIcon, SubLabel, HelpText } from '../controls'
+import { Switch, OptionBtn, FingerStepper, InlineIcon, SubLabel, HelpText, ButtonRow } from '../controls'
 import type { SettingDef } from '../types'
 import { applySkipEmptyBarsChange } from '../../../utils/reloadOpenSong'
 import { confirmDialog } from '../../../utils/confirmController'
@@ -10,7 +11,7 @@ import { holdNotesForTest } from '../../../hooks/useMidiInput'
 import { unsavedDetail } from '../../../utils/unsavedChanges'
 
 // Test builds: see the closing warning without changing a song and closing Orfeo
-function UnsavedWarningPreview() {
+export function UnsavedWarningPreview() {
   if (!simAvailable) return null
   const show = () => void confirmDialog({
     title: t`Unsaved changes`,
@@ -38,10 +39,10 @@ function TapTempoExtra() {
   return (
     <>
       <SubLabel>{t`Tap Tempo counting`}</SubLabel>
-      <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+      <ButtonRow>
         <OptionBtn active={mode === 'beat'} onClick={() => setMode('beat')}>{t`Every beat`}</OptionBtn>
         <OptionBtn active={mode === 'bar'} onClick={() => setMode('bar')}>{t`Only the 1`}</OptionBtn>
-      </div>
+      </ButtonRow>
       <HelpText>
         {mode === 'beat'
           ? t`Tap 1, 2, 3, 4 — like tapping your foot. Your first tap is the 1.`
@@ -58,9 +59,11 @@ function TempoWarningsExtra() {
   return (
     <>
       <SubLabel>{t`Dismissed tempo warnings`}</SubLabel>
-      <OptionBtn active={false} onClick={useStore.getState().clearTempoWarningDismissals}>
-        {dismissedCount === 1 ? t`Show the warning for 1 dismissed song again` : t`Show warnings for ${dismissedCount} dismissed songs again`}
-      </OptionBtn>
+      <ButtonRow>
+        <OptionBtn active={false} onClick={useStore.getState().clearTempoWarningDismissals}>
+          {dismissedCount === 1 ? t`Show the warning for 1 dismissed song again` : t`Show dismissed warnings again (${dismissedCount})`}
+        </OptionBtn>
+      </ButtonRow>
     </>
   )
 }
@@ -73,9 +76,9 @@ function CountInExtra() {
   return (
     <>
       <SubLabel>{t`Count-in bars`}</SubLabel>
-      <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+      <ButtonRow>
         {[1, 2, 3, 4].map(n => <OptionBtn key={n} active={bars === n} onClick={() => setBars(n)}>{String(n)}</OptionBtn>)}
-      </div>
+      </ButtonRow>
     </>
   )
 }
@@ -90,6 +93,7 @@ function SkipEmptyBarsExtra() {
       fontSize: 'var(--text-xs)', fontFamily: 'var(--font-ui)', color: 'var(--text-default)' }}>
       <span>{t`Keep drum count-ins`}</span>
       <Switch value={keep} onChange={v => { useStore.getState().setKeepDrumCountIn(v); void applySkipEmptyBarsChange() }} label={t`Keep drum count-ins`} />
+      <div style={{ gridColumn: '1' }}><HelpText>{t`Keeps one or two bars of plain drum clicks before the music.`}</HelpText></div>
     </div>
   )
 }
@@ -102,18 +106,18 @@ function HandAssignmentExtra() {
   if (!on) return null
   return (
     <>
-      <SubLabel>Max Fingers</SubLabel>
+      <SubLabel>{t`Max Fingers`}</SubLabel>
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 10, color: 'var(--text-default)', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap' }}>Left hand</span>
+          <span style={{ fontSize: 10, color: 'var(--text-default)', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap' }}>{t`Left hand`}</span>
           <FingerStepper value={lh} onChange={useStore.getState().setLhMaxFingers} />
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 10, color: 'var(--text-default)', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap' }}>Right hand</span>
+          <span style={{ fontSize: 10, color: 'var(--text-default)', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap' }}>{t`Right hand`}</span>
           <FingerStepper value={rh} onChange={useStore.getState().setRhMaxFingers} />
         </div>
       </div>
-      <HelpText>How many notes of a wide chord each hand can take before the rest is absorbed by the other — left counts from the bottom of the chord, right from the top.</HelpText>
+      <HelpText>{t`How many notes of a wide chord each hand can take before the rest goes to the other hand. The left hand counts from the bottom of the chord, the right from the top.`}</HelpText>
     </>
   )
 }
@@ -123,10 +127,16 @@ function HandAssignmentExtra() {
 function HandColoursLink() {
   return (
     <button onClick={() => useStore.getState().openSettingsWindow('appearance')}
-      style={{ padding: 0, border: 'none', background: 'none', cursor: 'pointer', font: 'inherit', fontStyle: 'normal', color: 'var(--text-amber)' }}>
+      style={{ padding: 0, border: 'none', background: 'none', cursor: 'pointer', font: 'inherit', fontStyle: 'normal', color: 'var(--text-amber)',
+        display: 'inline-flex', alignItems: 'center', gap: 3 }}>
       {t`Set your own hand colours`}
+      <ArrowUpRight size={11} strokeWidth={1.75} />
     </button>
   )
+}
+// Setup: the link on its own line, an empty line under the summary
+function HandColoursSetupLink() {
+  return <><br /><br /><HandColoursLink /></>
 }
 
 // ── Test builds: the Explorers listening to a keyboard, without one. Closes
@@ -140,7 +150,7 @@ function tryExplorerListening(which: 'chords' | 'scales') {
   if (which === 'chords') s.setChordExplorerOpen(true); else s.setScaleExplorerOpen(true)
   HELD_CHORDS.forEach((notes, i) => setTimeout(() => holdNotesForTest(notes, 1600), 700 + i * 2200))
 }
-function ExplorersHearPreview() {
+export function ExplorersHearPreview() {
   if (!simAvailable) return null
   const btn = (label: string, which: 'chords' | 'scales') => (
     <button onClick={() => tryExplorerListening(which)}
@@ -160,13 +170,17 @@ function ExplorersHearPreview() {
 
 export const PLAYBACK_DEFS: SettingDef[] = [
   {
-    id: 'unsavedWarning', icon: TriangleAlert, kind: 'switch', Extra: UnsavedWarningPreview,
+    id: 'unsavedWarning', icon: TriangleAlert, kind: 'switch',
     Control: () => { const v = useStore(s => s.unsavedWarningEnabled); return <Switch value={v} onChange={useStore.getState().setUnsavedWarningEnabled} label={t`Warn about unsaved changes`} /> },
   },
   {
+    id: 'saveTrackChanges', icon: Save, kind: 'switch',
+    Control: () => { const v = useStore(s => s.saveTrackChangesEnabled); return <Switch value={v} onChange={useStore.getState().setSaveTrackChangesEnabled} label={t`Save track changes`} /> },
+  },
+  {
     id: 'noteEditor', icon: AudioLines, kind: 'switch',
-    Control: () => { const v = useStore(s => s.noteEditorEnabled); return <Switch value={v} onChange={useStore.getState().setNoteEditorEnabled} label="MIDI Note Editor" /> },
-    Description: () => <>Shows <InlineIcon><AudioLines size={11} /></InlineIcon> icon in the Tracks panel. Enables MIDI note-editing mode directly on the piano roll.</>,
+    Control: () => { const v = useStore(s => s.noteEditorEnabled); return <Switch value={v} onChange={useStore.getState().setNoteEditorEnabled} label={t`MIDI Note Editor`} /> },
+    Description: () => <>{t`Shows`} <InlineIcon><AudioLines size={11} /></InlineIcon> {t`icon in the Tracks panel. Enables MIDI note-editing mode directly on the piano roll.`}</>,
   },
   {
     id: 'tapTempo', icon: Timer, kind: 'switch', Extra: TapTempoExtra,
@@ -182,34 +196,32 @@ export const PLAYBACK_DEFS: SettingDef[] = [
     Control: () => { const v = useStore(s => s.tempoWarningsEnabled); return <Switch value={v} onChange={useStore.getState().setTempoWarningsEnabled} label={t`Tempo warnings`} /> },
   },
   {
-    id: 'countIn', icon: ListOrdered, kind: 'switch', Extra: CountInExtra,
+    id: 'countIn', icon: Numbers, kind: 'switch', Extra: CountInExtra,
     Control: () => { const v = useStore(s => s.countInEnabled); return <Switch value={v} onChange={useStore.getState().setCountInEnabled} label={t`Count-in`} /> },
   },
   {
     id: 'skipEmptyBars', icon: SkipForward, kind: 'switch', Extra: SkipEmptyBarsExtra,
     Description: () => <>
       {t`Songs that begin with silent bars open with the music on bar 1: the piano roll, bar numbers, playback, loops and step-through all start there. Your files are never changed — switch it off to see a song exactly as written. Switching this on switches off Chord Transcription, whose charts number the bars as the file has them.`}
-      <br /><br />
-      {t`Keep drum count-ins keeps one or two bars of plain drum clicks before the music.`}
     </>,
     Control: () => { const v = useStore(s => s.skipEmptyBars); return <Switch value={v} onChange={x => { useStore.getState().setSkipEmptyBars(x); void applySkipEmptyBarsChange() }} label={t`Skip empty bars at the start`} /> },
   },
   {
     id: 'handAssignment', icon: Hand, kind: 'switch', Extra: HandAssignmentExtra,
-    Control: () => { const v = useStore(s => s.showHandLabels); return <Switch value={v} onChange={useStore.getState().setShowHandLabels} label="Hand Assignment" /> },
+    Control: () => { const v = useStore(s => s.showHandLabels); return <Switch value={v} onChange={useStore.getState().setShowHandLabels} label={t`Hand Assignment`} /> },
     Description: () => <>
       {t`On a single piano track, Orfeo works out which hand plays each note and colours it to match. Several piano or organ tracks are read together, as one player's two hands. A guideline, not a verified transcript!`}
       <br /><br />
-      For a perfectly accurate split use MIDI note editor and click the <InlineIcon><Hand size={11} /></InlineIcon> icon to manually assign notes to left and right hand.
+      {t`For a perfectly accurate split use MIDI note editor and click the`} <InlineIcon><Hand size={11} /></InlineIcon> {t`icon to manually assign notes to left and right hand.`}
       <br /><br />
       <HandColoursLink />
     </>,
-    SummaryEnd: HandColoursLink,
+    SummaryEnd: HandColoursSetupLink,
   },
   {
     id: 'loopRegion', icon: Repeat, kind: 'switch',
-    Control: () => { const v = useStore(s => s.loopRegionEnabled); return <Switch value={v} onChange={useStore.getState().setLoopRegionEnabled} label="Loop region" /> },
-    Description: () => <>Shows a strip to select and loop-play a section. Alt+Click & drag to select. Click <InlineIcon><Repeat size={11} /></InlineIcon> icon to loop.</>,
+    Control: () => { const v = useStore(s => s.loopRegionEnabled); return <Switch value={v} onChange={useStore.getState().setLoopRegionEnabled} label={t`Loop region`} /> },
+    Description: () => <>{t`Shows a strip to select and loop-play a section. Alt+Click & drag to select. Click`} <InlineIcon><Repeat size={11} /></InlineIcon> {t`icon to loop.`}</>,
   },
   {
     id: 'tempoDisplay', icon: Gauge, kind: 'choice',
@@ -217,19 +229,19 @@ export const PLAYBACK_DEFS: SettingDef[] = [
       const v = useStore(s => s.tempoDisplay)
       const set = useStore.getState().setTempoDisplay
       return (
-        <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+        <ButtonRow>
           <OptionBtn active={v === 'bpm'} onClick={() => set('bpm')}>{t`BPM`}</OptionBtn>
           <OptionBtn active={v === 'percent'} onClick={() => set('percent')}>{t`Speed %`}</OptionBtn>
-        </div>
+        </ButtonRow>
       )
     },
   },
   {
-    id: 'explorerPause', icon: Pause, kind: 'switch', Extra: ExplorersHearPreview,
+    id: 'explorerPause', icon: Pause, kind: 'switch',
     Control: () => { const v = useStore(s => s.explorerPausesPlayback); return <Switch value={v} onChange={useStore.getState().setExplorerPausesPlayback} label={t`Explorers pause playback`} /> },
   },
   {
     id: 'focusMode', icon: Focus, kind: 'switch',
-    Control: () => { const v = useStore(s => s.autoMuteNonKeyboard); return <Switch value={v} onChange={useStore.getState().setAutoMuteNonKeyboard} label="Focus mode" /> },
+    Control: () => { const v = useStore(s => s.autoMuteNonKeyboard); return <Switch value={v} onChange={useStore.getState().setAutoMuteNonKeyboard} label={t`Focus mode`} /> },
   },
 ]

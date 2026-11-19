@@ -1,8 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { Volume2, Library, Gauge, Upload, FileAudio } from 'lucide-react'
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { Volume2, Library, Gauge, Upload, FileAudio, Check } from 'lucide-react'
 import { useStore } from '../../../store'
 import { t } from '../../../utils/i18n'
-import { OptionBtn, Switch, SettingsDropdown, SoundfontActionLink, HelpText } from '../controls'
+import { OptionBtn, Switch, SoundfontActionLink, HelpText, ButtonRow, useSurface } from '../controls'
 import { getSamplesSampleRate, getSamplesBufferSec } from '../../../hooks/useSamplesEngine'
 import { MarqueeText } from '../../MarqueeText'
 import {
@@ -20,12 +20,12 @@ export const NATIVE_AVAILABLE = navigator.userAgent.includes('Windows')
 function SoundEngineControl() {
   const audioEngine = useStore((s) => s.audioEngine)
   return (
-    <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+    <ButtonRow vertical>
       <OptionBtn active={audioEngine === 'gm'} title={t`Generic — sounds like a 1996 Nokia phone`} oneLine
         onClick={async () => { if (useStore.getState().audioEngine === 'native') await stopNative(); useStore.getState().setAudioEngine('gm') }}>GM</OptionBtn>
       <OptionBtn active={audioEngine === 'samples'} title={t`Perfect for listening — real recorded instruments`} oneLine onClick={chooseSamplesFromQuick}>{t`Studio`}</OptionBtn>
       {NATIVE_AVAILABLE && <OptionBtn active={audioEngine === 'native'} title={t`Ideal for playing along on a connected keyboard`} oneLine onClick={() => useStore.getState().setAudioEngine('native')}>{t`Native`}</OptionBtn>}
-    </div>
+    </ButtonRow>
   )
 }
 
@@ -69,7 +69,13 @@ const msOf = (sec: number) => `${Math.round(sec * 1000 * 10) / 10} ms`
 // display: the sound card, how Orfeo uses it, the delay from "play" to
 // "heard", and the sound set playing
 const glanceBox = { marginTop: 6, border: '1px solid var(--border)', borderRadius: 6, padding: '2px 8px 6px' } as const
+// Settings window: the middle of three columns, amber-framed, as tall as its neighbours
+const windowBox = { border: '1px solid var(--accent-amber-strong)', borderRadius: 6, padding: '2px 10px 6px', flex: 1 } as const
 function SoundEngineGlance() {
+  const surface = useSurface()
+  return <SoundEngineRows box={surface === 'setup' ? glanceBox : windowBox} />
+}
+function SoundEngineRows({ box }: { box: CSSProperties }) {
   const audioEngine = useStore((s) => s.audioEngine)
   const samplesStatus = useSoundfontState((s) => s.samplesStatus)
   const latencySec = useOutputLatency()
@@ -93,8 +99,8 @@ function SoundEngineGlance() {
     if (phase !== 'running' || !native) return <InfoRow label={t`Sound card`}>{t`starting…`}</InfoRow>
     if (native.mode === 'none') return <InfoRow label={t`Sound card`}>{t`waiting for a sound card…`}</InfoRow>
     return (
-      <div>
-        <div style={glanceBox}>
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+        <div style={box}>
           <InfoRow label={t`Sound card`} marquee={native.deviceName} />
         <InfoRow label={t`Mode`} marquee={`${native.mode} ${native.rate} ${native.bufferFrames}`}>{native.mode === 'exclusive' ? amber(t`Exclusive (low latency)`) : t`Shared`} · {kHz(native.rate)} · {msOf(native.bufferFrames / native.rate)} {t`buffer`}</InfoRow>
           {latency}
@@ -107,7 +113,7 @@ function SoundEngineGlance() {
   }
   const rate = getSamplesSampleRate(), buffer = getSamplesBufferSec()
   return (
-    <div style={glanceBox}>
+    <div style={box}>
       <InfoRow label={t`Sound card`} marquee={audioEngine === 'gm' && gmExternal ? gmExternal : defaultName || t`Default output`} />
       <InfoRow label={t`Mode`} marquee={`${audioEngine} ${gmExternal} ${samplesStatus} ${rate} ${buffer}`}>{audioEngine === 'gm' && gmExternal ? t`External instrument` : <>{t`Shared`}{audioEngine === 'samples' && samplesStatus === 'ready' && rate > 0 && <> · {kHz(rate)}{buffer > 0 && <> · {msOf(buffer)} {t`buffer`}</>}</>}</>}</InfoRow>
       {latency}
@@ -132,10 +138,10 @@ function LowLatencyButtons() {
   return (
     <>
       <div style={{ marginTop: 12, marginBottom: 7, fontSize: 'var(--text-xs)', color: 'var(--text-default)', fontWeight: 500, letterSpacing: '0.02em', textTransform: 'uppercase' }}>{t`Low latency mode`}</div>
-      <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+      <ButtonRow>
         <OptionBtn active={!exclusive} onClick={() => setLowLatency(false)}>{t`Shared`}</OptionBtn>
         <OptionBtn active={exclusive} onClick={() => setLowLatency(true)}>{t`Exclusive`}</OptionBtn>
-      </div>
+      </ButtonRow>
     </>
   )
 }
@@ -181,7 +187,7 @@ function SoundEngineLoading() {
   return (
     <div style={{ marginTop: 7 }}>
       <div style={{ fontSize: 9, color: 'var(--text-dimmest)', fontFamily: 'var(--font-ui)', marginBottom: 4 }}>
-        Loading soundfont… {Math.round(samplesProgress * 100)}%
+        {t`Loading soundfont…`} {Math.round(samplesProgress * 100)}%
       </div>
       <div style={{ height: 3, background: 'var(--border)', borderRadius: 2, overflow: 'hidden' }}>
         <div style={{ height: '100%', background: 'var(--text-amber)', borderRadius: 2, width: `${Math.round(samplesProgress * 100)}%`, transition: 'width 0.1s' }} />
@@ -198,46 +204,62 @@ function SoundFontsControl() {
   const downloads = useSoundfontState((s) => s.downloads)
   const error = useSoundfontState((s) => s.error)
   const all = allSoundfonts(extra)
-  return (
-    <div style={{ opacity: audioEngine !== 'gm' ? 1 : 0.4, pointerEvents: audioEngine !== 'gm' ? 'auto' : 'none', transition: 'opacity 0.15s' }}>
-      <SettingsDropdown
-        value={selectedSoundfont}
-        onChange={(id) => void selectSoundfont(id)}
-        options={all.filter(sf => sf.downloaded).map(sf => ({ value: sf.id, label: `${sf.name} — ${sf.sizeMB} MB` }))}
-      />
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', columnGap: 'var(--space-2)', rowGap: 5, alignItems: 'center' }}>
+  const surface = useSurface()
+  // One list: tick a downloaded sound set to play with it (one at a time); the
+  // ticked one's name gets the amber pill. Not yet downloaded = can't be ticked.
+  const list = (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr) auto auto', columnGap: 'var(--space-2)', rowGap: 5, alignItems: 'center' }}>
         {all.map((sf) => {
           const isActive = selectedSoundfont === sf.id
+          const pick = () => { if (sf.downloaded && !isActive) void selectSoundfont(sf.id) }
           return (
             <div key={sf.id} style={{ display: 'contents' }}>
-              <span
-                style={{
-                  fontSize: 'var(--text-xs)', fontFamily: 'var(--font-ui)',
-                  color: isActive ? 'var(--text-amber)' : 'var(--text-inactive)', fontWeight: isActive ? 600 : 400,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}
-              >• {sf.name}</span>
+              <button role="checkbox" aria-checked={isActive} aria-label={t`Play with ${sf.name}`} disabled={!sf.downloaded} onClick={pick}
+                style={{ width: 13, height: 13, padding: 0, borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  border: `1px solid ${isActive ? 'var(--accent-amber-strong)' : 'var(--border2)'}`,
+                  background: isActive ? 'var(--accent-amber-medium)' : 'transparent', color: 'var(--text-amber)',
+                  cursor: sf.downloaded ? 'pointer' : 'default', opacity: sf.downloaded ? 1 : 0.4 }}>
+                {isActive && <Check size={10} strokeWidth={2} />}
+              </button>
+              <span style={{ minWidth: 0, display: 'flex' }}>
+                <span onClick={pick}
+                  style={{
+                    minWidth: 0, fontSize: 'var(--text-xs)', fontFamily: 'var(--font-ui)', lineHeight: 1.4,
+                    padding: '1px 6px', borderRadius: 4, border: `1px solid ${isActive ? 'var(--accent-amber-strong)' : 'transparent'}`,
+                    background: isActive ? 'var(--accent-amber-medium)' : 'transparent',
+                    color: isActive ? 'var(--text-amber)' : 'var(--text-inactive)', fontWeight: isActive ? 600 : 400,
+                    cursor: sf.downloaded && !isActive ? 'pointer' : 'default',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}
+                >{sf.name}</span>
+              </span>
               <span style={{ fontSize: 9, color: 'var(--text-dimmest)', fontFamily: 'var(--font-ui)', textAlign: 'right' }}>{sf.sizeMB} MB</span>
               {sf.id === 'generaluser-gs' ? (
-                <span style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'var(--font-ui)', textAlign: 'right' }}>bundled</span>
+                <span style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'var(--font-ui)', textAlign: 'right' }}>{t`bundled`}</span>
               ) : sf.downloaded ? (
-                <SoundfontActionLink label="remove" color="var(--text-dimmest)" tooltip={sf.custom ? 'Remove imported file' : 'Delete downloaded file'} onClick={() => void deleteSoundfont(sf.id)} />
+                <SoundfontActionLink label={t`remove`} color="var(--text-dimmest)" tooltip={sf.custom ? t`Remove imported file` : t`Delete downloaded file`} onClick={() => void deleteSoundfont(sf.id)} />
               ) : downloads[sf.id] !== undefined ? (
                 <div style={{ width: 60, height: 3, background: 'var(--border)', borderRadius: 2, overflow: 'hidden' }}>
                   <div style={{ height: '100%', background: 'var(--text-amber)', borderRadius: 2, width: `${Math.round(downloads[sf.id] * 100)}%`, transition: 'width 0.1s' }} />
                 </div>
               ) : (
-                <SoundfontActionLink label="download" color="var(--text-amber)" tooltip={`Download ${sf.name} (${sf.sizeMB} MB)`} onClick={() => void downloadSoundfont(sf.id)} />
+                <SoundfontActionLink label={t`download`} color="var(--text-amber)" tooltip={t`Download ${sf.name} (${sf.sizeMB} MB)`} onClick={() => void downloadSoundfont(sf.id)} />
               )}
             </div>
           )
         })}
       </div>
       {error && <div style={{ fontSize: 9, color: 'var(--status-error)', fontFamily: 'var(--font-ui)', marginTop: 5 }}>{error}</div>}
+    </div>
+  )
+  const importer = (
+    <div style={surface === 'window' ? { display: 'grid', justifyItems: 'end', textAlign: 'right' } : undefined}>
       <button
           onClick={() => void importSoundfont()}
           style={{
-            display: 'flex', alignItems: 'center', gap: 6, margin: '14px 0 8px', padding: '6px 8px', width: '100%',
+            display: 'flex', alignItems: 'center', gap: 6, margin: surface === 'window' ? '0 0 8px' : '14px 0 8px',
+            padding: surface === 'window' ? '6px 14px' : '6px 8px', width: surface === 'window' ? 'auto' : '100%', whiteSpace: 'nowrap',
             borderRadius: 4, border: '1px dashed var(--text-muted)', background: 'transparent',
             color: 'var(--text-default)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-ui)', cursor: 'pointer', justifyContent: 'center',
           }}
@@ -245,20 +267,26 @@ function SoundFontsControl() {
           onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-default)'; e.currentTarget.style.borderColor = 'var(--text-muted)' }}
         >
           <Upload size={11} strokeWidth={1.5} />
-          Import your own .sf2/.sf3
+          {t`Import your own .sf2/.sf3`}
         </button>
-      <HelpText>Make sure you have the rights to use imported soundfonts.</HelpText>
+      <HelpText>{t`Make sure you have the rights to use imported soundfonts.`}</HelpText>
+    </div>
+  )
+  return (
+    <div style={{ opacity: audioEngine !== 'gm' ? 1 : 0.4, pointerEvents: audioEngine !== 'gm' ? 'auto' : 'none', transition: 'opacity 0.15s',
+      ...(surface === 'window' ? { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', columnGap: 16, alignItems: 'start' } : {}) }}>
+      {list}{importer}
     </div>
   )
 }
 
 export const AUDIO_DEFS: SettingDef[] = [
-  { id: 'soundEngine', icon: Volume2, kind: 'choice', layout: 'controlFirst', Description: SoundEngineDescription,
+  { id: 'soundEngine', icon: Volume2, kind: 'choice', layout: 'columns', Description: SoundEngineDescription,
     Control: SoundEngineControl, Glance: SoundEngineGlance, Extra: SoundEngineExtra, QuickExtra: SoundEngineQuickExtra },
   { id: 'soundFonts', icon: Library, kind: 'choice', Control: SoundFontsControl },
   {
     id: 'autoLevel', icon: Gauge, kind: 'switch',
-    Control: () => { const v = useStore(s => s.autoLevelOnLoad); return <Switch value={v} onChange={useStore.getState().setAutoLevelOnLoad} label="Auto-Level on Load" /> },
+    Control: () => { const v = useStore(s => s.autoLevelOnLoad); return <Switch value={v} onChange={useStore.getState().setAutoLevelOnLoad} label={t`Auto-Level on Load`} /> },
   },
   {
     id: 'exportAudio', icon: FileAudio, kind: 'switch',

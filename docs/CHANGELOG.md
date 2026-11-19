@@ -5,6 +5,146 @@
      list of 2–4 one-line bullets, then ### New / ### Changed / ### Fixed.
      Newest version at the top. -->
 
+## [1.8] — 19. 11. 2026 — Tags, a practice queue, smarter hands and lighted keys
+
+**In short**
+- Tag your songs, plan a practice queue in the top bar, and see at a glance which songs have lyrics.
+- Left and right hands are far more accurate, and Orfeo tells you how sure it is and which passages to check.
+- Keyboards with lighted keys show the song's notes, Orfeo learns your keyboard's size, and the keyboard bar adds 25, 37 and 49 keys.
+- One EDITS badge for everything unsaved, Sargam note names, double-click to open MIDI files, and Orfeo ready for translation.
+
+### New
+- **Sargam note names.** Settings › Chords & Notation › Display system has a fifth choice,
+  Sargam (Sa re Re ga Ga Ma Ma′ Pa dha Dha ni Ni), in Latin letters or Devanagari. The keys
+  and the notes on the piano roll take Sargam names counted from Sa, which follows the song's
+  key or sits where you set it, and stays there from song to song. Chord and key names stay
+  Western.
+- **Orfeo in your language.** Turn on *Show language switcher* in Settings › Language for a menu
+  under the logo with English plus the languages you tick there, and *Follow system language* picks the one your computer uses. A
+  language can be chosen once people have translated 80 % of it; Settings › Language shows how
+  far each one has come on Weblate and links to it. Translation is just starting, so for now the
+  menu holds English only: want Orfeo in your language? Start translating it on Weblate, and it
+  appears in the menu as soon as it's ready. New translations can arrive between Orfeo versions (choose
+  *Download now*, or *Wait for new version of Orfeo*). Thanks to Jacky Jiang (FreeGoStudio) for the
+  groundwork.
+- **Your keyboard's own lights.** A keyboard with lighted keys can now show the song's notes
+  as they play, just as the on-screen keyboard does: shown tracks only, never the keys you
+  press yourself. Turn on Settings › MIDI Keyboard › Key lights, then choose how for each keyboard:
+  *Yamaha* (channel 1), *Casio, Akai* (channel 3) or *Note messages* on any channel;
+  *PartyKeys*, recognised by itself, with each note in its track or hand colour; or the ways
+  of their own for *LED strips and iPiano*, *The ONE Smart Piano* (and Piano LED Plus) and
+  *Vangoa*. *Try it* lights a scale to check, and the card explains step by step how to find
+  the channel of a keyboard that isn't listed. Orfeo leaves
+  every keyboard dark when it closes.
+- **Orfeo learns your keyboard's size.** The first time you plug in a USB keyboard, a small
+  window asks you to press its lowest key, then its highest. Orfeo says thank you, closes the
+  window by itself and remembers the range for that keyboard, separately for each keyboard you
+  own. The on-screen keyboard then switches to 61, 73 or 88 keys, the smallest that holds every
+  key of the one you're playing; you can still pick another size. Settings › MIDI Keyboard shows
+  each keyboard's range, with *Measure again* if you want to redo it.
+- **Open MIDI files with a double click.** Orfeo now offers itself as the app for .mid, .midi and
+  .kar files on Windows, macOS and Linux. Make it the default once, and a double click opens the
+  song in Orfeo, in the window that's already open if there is one. Settings › MIDI Files &
+  Library › Open with Orfeo explains how for your system, and Add to Library on double click
+  also copies each song into your Library, as dropping a file does.
+- **See which songs have lyrics.** Settings › MIDI Files & Library › Show files with lyrics puts a
+  small amber microphone beside every song that carries lyrics, .kar and MIDI files
+  alike, whatever the file is called. Orfeo checks the Library quietly in the background, never
+  while a song plays, and remembers what it found.
+- **Tags for your songs.** Label songs your way (style, difficulty, what you're practising) with
+  right-click › Tags…, on one song or a whole selection, and make new tags right there. The row
+  under All / ★ holds the tags you choose with ▾ (a few ready-made ones to start): click one to
+  show only its songs, and several together show the songs that have all of them. The search
+  finds tags too.
+  Settings › MIDI Files & Library › Tags renames and deletes them. Tags are Orfeo's own notes:
+  your files are never renamed or changed.
+- **A practice queue.** Plan a session: Settings › MIDI Files & Library › Practice queue adds a
+  Practice queue button to the top bar, after the key, showing how many songs are queued. Click
+  it to drop down the queue; your Library's folders stay as they are. Add
+  songs with right-click › Add to practice queue (always there: it switches the queue on by itself) or by dragging them onto the button. Drag to reorder, and move
+  through them with Alt + ↓ / ↑ or the queue's buttons. When a queued song ends, Orfeo can ask
+  what's next, play the next song after a short countdown, repeat the song, or wait. The queue
+  is still there the next time you open Orfeo.
+- **Two short tours for new users.** Each opens with a welcome card listing the stops ahead.
+  On a first start, Orfeo points out where your songs are, how to open one, what a right-click
+  on a song offers, the sound engine and the MIDI keyboard. The first time a song opens, a
+  second tour ("Create your first lesson") shows the Tracks panel, play, tempo and the
+  metronome with its count-in, looping, the chord name, the two Explorers and the Playback
+  Editor, Note Editor and Mixer. Each step is one small card with Next, Back and ✕ (or Enter, the arrow keys and
+  Esc), and the song never starts behind it. Each tour shows once, only on a new install, so
+  updating from an earlier version changes nothing. Settings › Appearance › Onboarding tours shows either
+  one again.
+- **Your unsaved edits at a glance.** An EDITS badge next to the song length counts the changes
+  you haven't saved yet. Hover it for the list, grouped by where you made them; click it to save
+  them all at once or let them go. Closing or opening a song with unsaved changes asks once, in one
+  window (*You have unsaved changes*), instead of a separate question from each tool.
+- **Save track changes.** Settings › Editing, on from the start. What you change in the Tracks
+  panel (showing or hiding tracks, keyboard lights, mute) is saved with the song: it counts in the
+  Edits badge, and a line under the track list says how many you've made, with a link to save them.
+  Turn it off to keep those changes for this session only, so the song opens as before next time.
+- **How sure Orfeo is about the hands, and where to look.** When Orfeo works out the hands itself,
+  the Playback Editor and the Note Editor now say how likely they are right ("about 95%") and how
+  many passages are worth a look. *Check the passages* opens the Note Editor on the first one and
+  loops it, with three choices right in the editor's HANDS section: listen, *The hands are right*,
+  or fix it by hand. The Note Editor now always opens with Hand mode on. Keeping the hands
+  counts as an edit: it can be undone, and once saved the song never marks that passage again.
+- **Portable keyboards.** Settings › Virtual Keyboard › Portable keyboards adds the sizes of small
+  studio keyboards, 25, 37 and 49 keys, to the left of 61, 73 and 88 in the keyboard bar, with
+  octave buttons to move them like on the real thing. Notes beyond their edges show fainter on the
+  key with the same name inside. A small USB keyboard picks its own size when it's on. Every size
+  change, on any keyboard, now glides: the keys and the falling notes scale together.
+
+### Changed
+- **A wider Library, if you like.** Drag the Library's right edge to make it up to a quarter
+  wider, so long song names and tags have more room. Double-click the edge for the
+  usual width. Setup keeps its width, and in a small window the Library stays as it was so the
+  piano roll never loses space.
+- **Settings › MIDI Files & Library** is laid out afresh, and Chord Transcription's description
+  now says what it does: when it's on, a song's file icon makes the chord chart.
+- **Left and right hands, much more accurate.** A piano written on two staves (how MuseScore,
+  Sibelius and Finale export it) now takes its hands straight from the staves: upper staff
+  right hand, lower staff left, note for note. When a piano comes as one track, Orfeo now
+  follows where the hands divide through the song, looking a moment ahead and behind, so
+  wrong notes are less than half as many as before and a whole piece can no longer end up on
+  the wrong hand. An oom-pah or stride left hand (a bass note, then a chord) keeps its chords
+  in the left hand. A melody that never plays two notes at once stays in one hand. Every
+  keyboard part of a band song gets its own hands, so an organ, a second piano or a track of
+  chord symbols no longer takes over the piano's left hand. Notes you moved to the other hand
+  yourself keep their hand; everything else is worked out afresh the first time a song opens.
+  A fast right-hand run over a held left-hand chord keeps its notes in the right hand, and a
+  tune that dips down toward the left hand stays in the right.
+- **Chord names for a piano on two staves.** Its two staves are now read together as one
+  instrument. Before, the lower staff could be taken for a bass line and the upper one for the
+  melody, so the chord was read from the wrong notes.
+- **The Mixer's changes are saved with your other edits** and counted in the Edits badge; the
+  Mixer no longer asks on its own when you close it.
+- **Software MIDI cables stay out of the keyboard list.** Ports such as loopMIDI, LoopBe, a
+  Windows MIDI loopback, the Mac IAC bus or Linux's Midi Through only pass notes between apps
+  and have no keys. Settings › MIDI Keyboard no longer lists them, so they never become the
+  keyboard Orfeo follows, never ask for their lowest and highest key and never switch Low
+  latency on. A keyboard you've unplugged can be taken off the list with *Forget*; it comes
+  back by itself the next time you plug it in, with its keys and lights as you set them.
+
+### Fixed
+- **Saving never throws away your other unsaved changes.** Saving notes from the Note Editor, or
+  saving from the Playback Editor, used to reload the song and lose unsaved changes from the Mixer,
+  the Tracks panel or the tempo. They now stay, still unsaved, until you save or discard them.
+  Switching *Skip empty bars* on or off keeps them too.
+- **Orfeo's settings survive a crash.** A power cut or crash while Orfeo saved its settings could
+  leave the settings file empty, and Orfeo started over with your tags, favourites, tapped tempos
+  and keyboards gone. Settings are now written so the file is always whole, with a backup of the
+  last good one.
+- **Tooltips no longer stay on screen** after dragging a Mixer strip or closing the Mixer.
+- **The Library's scroll bar can be dragged again**; it sat right next to the edge that widens the
+  Library, which took over the click.
+- **Saving from the Playback Editor no longer splits a staff between the hands.** A piano
+  written on two staves kept its hands only until the next save, which then divided each staff
+  between both hands. Merging a piano's two staves into one track now keeps the hands they had.
+- **A piano opened from MusicXML, Guitar Pro or Capella now gets its hands from its staves too.**
+  Opening the file merged the piano's two staves into one part, so Orfeo had to guess which notes
+  belong to which hand. Each staff now stays its own part, as when the notation program saves a
+  MIDI file itself. Thanks to Rafael Carvalho (Shishudy) for finding it and sending the fix.
+
 ## [1.7.3] — 12. 11. 2026 — The Explorers hear your keyboard, a bigger Settings window
 
 **In short**

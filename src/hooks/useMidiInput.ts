@@ -16,7 +16,8 @@ import { isTapCapturing, registerTap } from '../utils/tapTempoSession'
 import {
   useMidiSettings, midiPrefsReady, shapeVelocity, type ControlKind, type MidiDeviceInfo, type MidiOutputInfo,
 } from '../store/midiSettings'
-import { cleanPortName, displayName } from '../utils/midiDeviceNames'
+import { cleanPortName, displayName, looksVirtual } from '../utils/midiDeviceNames'
+import { simAvailable } from '../utils/midiSimulator'
 import { recordNote, countEvent } from '../utils/midiDiagnostics'
 import {
   liveNoteOn as samplesNoteOn, liveNoteOff as samplesNoteOff, liveControl as samplesControl,
@@ -26,6 +27,9 @@ import {
 import { liveNoteOn as gmNoteOn, liveSend as gmSend, liveReset as gmReset } from './useAudioEngine'
 import { nativeCall } from '../audio/nativeClient'
 import { nativeLivePiano } from '../audio/useNativeEngine'
+import { fitKeyboard, type KeyRange } from '../utils/keyboardRange'
+import { isLightEcho } from '../utils/keyLightEcho'
+import { t } from '../utils/i18n'
 
 const HARDWARE_COLOR = 'var(--text-amber)'
 
@@ -41,6 +45,10 @@ const _swallow = new Map<string, number>()              // note-offs to ignore f
 // Keyboards that were unplugged while "Reconnect automatically" was off —
 // not listened to again until Rescan
 const _waitingForRescan = new Set<string>()
+// Unplugged keyboards the player removed from the list (Forget) — back when plugged in again
+const _forgotten = new Set<string>()
+// Keyboards a note was played on this session
+const _played = new Set<string>()
 
 const isSamples = () => useStore.getState().audioEngine === 'samples'
 const isNative = () => useStore.getState().audioEngine === 'native'
@@ -157,6 +165,7 @@ function noteOn(key: string, note: number, raw: number, stamp: number, t0: numbe
   recordNote(stamp, t0, performance.now(), note, vel, key)
   heldBy(key).add(note)
   lightOn(note)
+  _played.add(key)
   setActive(key)
 }
 
@@ -219,11 +228,17 @@ function handleMessage(e: MIDIMessageEvent, portId: string) {
   const status = data[0]
   if (status >= 0xF0) return  // clock / active sensing / sysex: not playing
   const key = _portDevice.get(portId)
+  const type = status & 0xF0
+  const d1 = data[1] ?? 0, d2 = data[2] ?? 0
+  if (key && type === 0x90 && d2 > 0 && isLightEcho(key, d1, d2)) {
+    const id = key + ':' + d1
+    _swallow.set(id, (_swallow.get(id) ?? 0) + 1)  // and its note-off
+    return
+  }
+  if (key && _rangeKey && type === 0x90 && d2 > 0) _rangeKey(key, d1)
   if (!key || !isListening(key)) return
   countEvent('messages')
   markActivity(key, t0)
-  const type = status & 0xF0
-  const d1 = data[1] ?? 0, d2 = data[2] ?? 0
   if (type === 0x90 && d2 > 0) noteOn(key, d1, d2, e.timeStamp, t0)
   else if (type === 0x80 || type === 0x90) noteOff(key, d1)
   else if (type === 0xB0) control(d1, d2)
@@ -245,16 +260,18 @@ function detachAll() {
 }
 
 // What the top bar shows: the keyboard last played if it's still there,
-// otherwise the first connected one that's listened to
+// otherwise the first connected one that's listened to. A virtual port (dev
+// mode only) counts only once a note has actually come from it.
 function publishTopBar() {
   const m = useMidiSettings.getState()
-  const connected = m.devices.filter(d => d.connected)
+  const connected = m.devices.filter(d => d.connected && (!d.virtual || _played.has(d.key)))
   const pick = connected.find(d => d.key === m.activeDevice)
     ?? connected.find(d => d.key === m.lastDevice)
     ?? connected.find(d => isListening(d.key))
     ?? connected[0]
   if (pick && m.activeDevice !== pick.key) useMidiSettings.setState({ activeDevice: pick.key })
   useStore.getState().setMidiDevice(!!pick, pick?.name ?? '')
+  if (pick) adaptKeyboardSize(pick.key)
 }
 
 function syncDevices() {
@@ -263,9 +280,14 @@ function syncDevices() {
   const present = new Map<string, MidiDeviceInfo>()
   access.inputs.forEach((input) => {
     const key = cleanPortName(input.name ?? '')
-    _portDevice.set(input.id, key)
     const connected = input.state === 'connected'
-    const d = present.get(key) ?? { key, name: displayName(key, input.manufacturer), connected: false, portIds: [] }
+    // Virtual ports (loopMIDI and the like) have no keys: shown in dev mode only
+    const virtual = looksVirtual(key)
+    if (virtual && !simAvailable) return
+    if (connected) _forgotten.delete(key)
+    else if (_forgotten.has(key)) return
+    _portDevice.set(input.id, key)
+    const d = present.get(key) ?? { key, name: displayName(key, input.manufacturer), connected: false, portIds: [], virtual }
     d.connected ||= connected
     d.portIds.push(input.id)
     present.set(key, d)
@@ -286,6 +308,7 @@ function syncDevices() {
   }
   for (const [key, d] of present) _known.set(key, d)
   for (const [key, d] of _known) if (!present.has(key)) _known.set(key, { ...d, connected: false })
+  for (const key of _forgotten) _known.delete(key)
 
   const outputs: MidiOutputInfo[] = []
   access.outputs.forEach((o) => {
@@ -298,24 +321,134 @@ function syncDevices() {
   firstConnectionPopup()
 }
 
-// ── First time a keyboard is ever connected: open Settings on its page, once
+// ── First time a keyboard is ever connected: open Settings on its page, once.
+// Before that, any keyboard whose keys Orfeo doesn't know yet is asked for
+// its lowest and highest key; Settings opens once that pop-up has closed.
+let _settingsAfterRange = false
 function firstConnectionPopup() {
   const m = useMidiSettings.getState()
   if (!m.prefsLoaded) return
-  const fresh = m.devices.filter(d => d.connected && !m.seenDevices.includes(d.key))
-  if (!fresh.length) return
-  useMidiSettings.setState({ seenDevices: [...m.seenDevices, ...fresh.map(d => d.key)] })
-  useStore.getState().openSettingsWindow('midi')
+  const fresh = m.devices.filter(d => d.connected && !d.virtual && !m.seenDevices.includes(d.key))
+  if (fresh.length) {
+    useMidiSettings.setState({ seenDevices: [...m.seenDevices, ...fresh.map(d => d.key)] })
+    _settingsAfterRange = true
+  }
+  if (askRangeIfNeeded()) return
+  if (_settingsAfterRange) { _settingsAfterRange = false; useStore.getState().openSettingsWindow('midi') }
+}
+
+// ── Keyboard range: how many keys each keyboard has ─────────────────────────
+// MIDI never says, so the pop-up (components/KeyboardRangePrompt.tsx) asks for
+// the lowest and highest key, once per keyboard, and it's kept in the prefs.
+// A simulated keyboard (dev tools) is remembered for the session only.
+let _rangeKey: ((deviceKey: string, note: number) => void) | null = null
+export function onRangeKey(fn: (deviceKey: string, note: number) => void): () => void {
+  _rangeKey = fn
+  return () => { if (_rangeKey === fn) _rangeKey = null }
+}
+
+export const isSimDevice = (d: MidiDeviceInfo) => d.portIds.length > 0 && d.portIds.every(id => id.startsWith('sim-'))
+export const deviceOf = (key: string) => useMidiSettings.getState().devices.find(d => d.key === key)
+
+// The keyboard's own MIDI output (same model name as its input), for its lights
+export function outputFor(key: string): MIDIOutput | null {
+  if (!_access) return null
+  const all: MIDIOutput[] = []
+  _access.outputs.forEach(o => { if (o.state === 'connected' && cleanPortName(o.name ?? '') === key) all.push(o) })
+  return all.find(o => !/^MIDIOUT\d/i.test(o.name ?? '')) ?? all[0] ?? null
+}
+
+export function rangeOf(key: string): KeyRange | undefined {
+  const m = useMidiSettings.getState()
+  const d = deviceOf(key)
+  return d && isSimDevice(d) ? m.simRanges[key] : m.keyRanges[key]
+}
+
+function askRangeIfNeeded(): boolean {
+  const m = useMidiSettings.getState()
+  if (!m.prefsLoaded) return false
+  if (m.rangePrompt) return true
+  if (useStore.getState().tourActive) return true  // after the tour (see below)
+  const d = m.devices.find(d => d.connected && !d.virtual && (isSimDevice(d)
+    ? !m.simRangeAsked.includes(d.key) && !m.simRanges[d.key]
+    : !m.rangeAsked.includes(d.key) && !m.keyRanges[d.key]))
+  if (!d) return false
+  useMidiSettings.setState({ rangePrompt: { key: d.key, name: d.name, sim: isSimDevice(d) } })
+  return true
+}
+
+// A tour on screen goes first; the pop-up (or Settings) follows when it ends
+const _unsubTour = useStore.subscribe((s, prev) => { if (prev.tourActive && !s.tourActive) firstConnectionPopup() })
+
+// Settings › MIDI Keyboard: ask this keyboard again
+export function measureKeyboardRange(key: string): void {
+  const d = deviceOf(key)
+  if (!d?.connected) return
+  useMidiSettings.setState({ rangePrompt: { key: d.key, name: d.name, sim: isSimDevice(d) } })
+}
+
+// Dev Tools: the pop-up for a pretend keyboard — any key counts, nothing saved
+export function showRangePromptForTest(): void {
+  useMidiSettings.setState({ rangePrompt: { key: '__test__', name: 'Test keyboard', test: true } })
+}
+export function pressRangeKeyForTest(note: number): void { _rangeKey?.('__test__', note) }
+
+// Both keys pressed: keep the range and size the on-screen keyboard to it
+export function saveKeyboardRange(range: KeyRange): void {
+  const m = useMidiSettings.getState()
+  const p = m.rangePrompt
+  if (!p) return
+  if (p.sim) useMidiSettings.setState({ simRanges: { ...m.simRanges, [p.key]: range } })
+  else if (!p.test) useMidiSettings.setState({ keyRanges: { ...m.keyRanges, [p.key]: range } })
+  markRangeAsked(p.key, p)
+  if (p.test || deviceOf(p.key)?.connected) setSizeFor(p.key, range)
+}
+
+// The pop-up closes (done, skipped or Esc): a skipped keyboard isn't asked
+// again (Settings can still measure it), then the next one, or Settings
+export function closeRangePrompt(): void {
+  const p = useMidiSettings.getState().rangePrompt
+  if (!p) return
+  markRangeAsked(p.key, p)
+  useMidiSettings.setState({ rangePrompt: null })
+  firstConnectionPopup()
+}
+
+function markRangeAsked(key: string, p: { test?: boolean; sim?: boolean }) {
+  const m = useMidiSettings.getState()
+  if (p.test) return
+  if (p.sim) { if (!m.simRangeAsked.includes(key)) useMidiSettings.setState({ simRangeAsked: [...m.simRangeAsked, key] }) }
+  else if (!m.rangeAsked.includes(key)) useMidiSettings.setState({ rangeAsked: [...m.rangeAsked, key] })
+}
+
+// The on-screen keyboard takes the smallest size that holds the keyboard in
+// use — once per keyboard (and range), so a size picked by hand afterwards
+// stays until another keyboard is played. Outside practice mode only: practice
+// mode keeps 88 keys.
+let _sizedFor = ''
+function adaptKeyboardSize(key: string) {
+  const r = rangeOf(key)
+  if (!r) return
+  if (key + ":" + r.low + "-" + r.high === _sizedFor) return
+  setSizeFor(key, r)
+}
+function setSizeFor(key: string, r: KeyRange) {
+  _sizedFor = key + ":" + r.low + "-" + r.high
+  const st = useStore.getState()
+  const { size, octave } = fitKeyboard(r, st.portableKeyboards)
+  if (st.keyboardSize !== size) st.setKeyboardSize(size)
+  if (useStore.getState().keyboardOctave !== octave) useStore.getState().setKeyboardOctave(octave)
 }
 
 async function connect(): Promise<void> {
   if (!navigator.requestMIDIAccess) {
-    useMidiSettings.setState({ accessError: 'MIDI is not available in this build.' })
+    useMidiSettings.setState({ accessError: t`MIDI is not available in this build.` })
     return
   }
   try {
     await midiPrefsReady
-    const access = await navigator.requestMIDIAccess()
+    // SysEx lets Orfeo light the keys of keyboards that need it (PartyKeys)
+    const access = await navigator.requestMIDIAccess({ sysex: true }).catch(() => navigator.requestMIDIAccess())
     if (_access) _access.onstatechange = null
     _access = access
     useMidiSettings.setState({ accessError: null })
@@ -336,6 +469,22 @@ export async function rescanMidiDevices(): Promise<void> {
   detachAll()
   _portDevice.clear()
   await connect()
+}
+
+// Settings › MIDI Keyboard: take an unplugged keyboard off the list. It comes
+// back by itself when it's plugged in again; its measured keys and light
+// settings are kept for that.
+export function forgetKeyboard(key: string): void {
+  if (_known.get(key)?.connected) return
+  _forgotten.add(key)
+  _known.delete(key)
+  _held.delete(key)
+  _played.delete(key)
+  _waitingForRescan.delete(key)
+  const m = useMidiSettings.getState()
+  const { [key]: _gone, ...activity } = m.activity
+  useMidiSettings.setState({ devices: m.devices.filter(d => d.key !== key), activity })
+  publishTopBar()
 }
 
 // Every key up, pedals up, wheels centred — on both engines (the button:
@@ -380,4 +529,4 @@ export function useMidiInput() {
   }, [])
 }
 
-if (import.meta.hot) import.meta.hot.dispose(() => { detachAll(); if (_access) _access.onstatechange = null; _unsubListen() })
+if (import.meta.hot) import.meta.hot.dispose(() => { detachAll(); if (_access) _access.onstatechange = null; _unsubListen(); _unsubTour() })

@@ -48,7 +48,7 @@ export function BetaBadge() {
       opacity: 0.85,
       flexShrink: 0,
     }}>
-      BETA
+      {t`BETA`}
     </span>
   )
 }
@@ -110,6 +110,17 @@ export function CollapsibleSection({ icon, label, defaultCollapsed = false, coll
   )
 }
 
+// ── A row of buttons. Settings window: every button as wide as the widest
+// one's words, lined up from the left, the rest of the row left empty.
+// Setup (the narrow drawer): the buttons share the whole row, as before.
+// `vertical` (window only): one under another, all as wide as the widest.
+export function ButtonRow({ children, gap = 'var(--space-1)', vertical }: { children: ReactNode; gap?: string | number; vertical?: boolean }) {
+  const surface = useSurface()
+  if (surface === 'setup') return <div style={{ display: 'flex', gap }}>{children}</div>
+  if (vertical) return <div style={{ display: 'grid', gap, width: 'max-content', maxWidth: '100%' }}>{children}</div>
+  return <div style={{ display: 'grid', gridAutoFlow: 'column', gridAutoColumns: 'minmax(0, 1fr)', gap, width: 'max-content', maxWidth: '100%' }}>{children}</div>
+}
+
 // ── Option button — amber-tinted pill toggle for multi-choice settings rows
 // activeColor: 'accent' (default, amber) | 'error' (red — used for Hide/EyeOff)
 export function OptionBtn({ active, onClick, children, title, oneLine, comingSoon, activeColor = 'accent' }: {
@@ -120,12 +131,13 @@ export function OptionBtn({ active, onClick, children, title, oneLine, comingSoo
   const activeBorder = activeColor === 'error' ? 'var(--status-error)' : 'var(--accent-amber-strong)'
   const activeBg    = activeColor === 'error' ? 'var(--status-error-tint-bg)' : 'var(--accent-amber-medium)'
   const activeText  = activeColor === 'error' ? 'var(--status-error)'    : 'var(--text-amber)'
+  const surface = useSurface()
 
   const btn = (
     <button
       onClick={comingSoon ? undefined : onClick}
       style={{
-        flex: 1, padding: '4px 0', borderRadius: 4,
+        flex: 1, padding: surface === 'window' ? '4px 14px' : '4px 0', borderRadius: 4,
         border: active ? `1px solid ${activeBorder}` : '1px solid var(--border2)',
         background: active ? activeBg : 'var(--bg-modal)',
         color: active ? activeText : 'var(--text-inactive)',
@@ -207,7 +219,7 @@ export function ZoomStepper({ percent, steps, max, onStep, onReset, tooltips = t
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, border: '1px solid var(--border2)', borderRadius: 4, padding: '1px 6px' }}>
-        <MaybeTip on={tooltips} title="Zoom out">
+        <MaybeTip on={tooltips} title={t`Zoom out`}>
         <button
           onClick={() => onStep(-1)}
           disabled={atMin}
@@ -217,7 +229,7 @@ export function ZoomStepper({ percent, steps, max, onStep, onReset, tooltips = t
         ><ZoomOut size={12} strokeWidth={1.5} /></button>
         </MaybeTip>
         <span style={{ fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', fontWeight: 700, color: 'var(--text-amber)', minWidth: 34, textAlign: 'center' }}>{percent}%</span>
-        <MaybeTip on={tooltips} title="Zoom in">
+        <MaybeTip on={tooltips} title={t`Zoom in`}>
         <button
           onClick={() => onStep(1)}
           disabled={atMax}
@@ -227,7 +239,7 @@ export function ZoomStepper({ percent, steps, max, onStep, onReset, tooltips = t
         ><ZoomIn size={12} strokeWidth={1.5} /></button>
         </MaybeTip>
       </div>
-      <MaybeTip on={tooltips} title="Reset to 100%">
+      <MaybeTip on={tooltips} title={t`Reset to 100%`}>
       <button
         onClick={onReset}
         disabled={percent === 100}
@@ -267,8 +279,8 @@ export function HitEffectColorSwatch({ color, onChange }: { color: string | null
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       <Tooltip
-        title="Particle color"
-        description="Overrides every track's color for the effect flourish — the falling notes and key glow keep their own track colors."
+        title={t`Particle color`}
+        description={t`Overrides every track's color for the effect flourish — the falling notes and key glow keep their own track colors.`}
       >
       <button
         onClick={() => { setHexInput(color ?? '#e8a027'); setOpen(o => !o) }}
@@ -278,7 +290,7 @@ export function HitEffectColorSwatch({ color, onChange }: { color: string | null
         }}
       >
         <Palette size={13} strokeWidth={1.5} style={{ color: 'var(--text-amber)', flexShrink: 0 }} />
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-faint)', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap' }}>Color</span>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-faint)', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap' }}>{t`Color`}</span>
         <span style={{
           width: 14, height: 14, borderRadius: 3, flexShrink: 0,
           background: color ?? 'var(--hand-lh)',
@@ -309,7 +321,7 @@ export function HitEffectColorSwatch({ color, onChange }: { color: string | null
             value={hexInput}
             onChange={e => commitHex(e.target.value)}
             placeholder="#e8a027"
-            aria-label="Hit-effect color, hex value"
+            aria-label={t`Hit-effect color, hex value`}
             style={{
               width: '100%', padding: '4px 6px', borderRadius: 4, border: '1px solid var(--border2)',
               background: 'var(--bg-modal)', color: 'var(--text-default)', fontSize: 'var(--text-xs)',
@@ -430,7 +442,8 @@ export function SettingsDropdown<T extends string>({ value, options, onChange, t
               </div>
             )
             return o.title
-              ? <Tooltip key={o.value} title={o.title} wrapperStyle={{ display: 'block', width: '100%' }}>{row}</Tooltip>
+              // the option's own name is the amber heading, its explanation goes under it
+              ? <Tooltip key={o.value} title={o.label} description={o.title} wrapperStyle={{ display: 'block', width: '100%' }}>{row}</Tooltip>
               : row
           })}
         </div>
@@ -461,9 +474,10 @@ export function ZoomStepBtn({ onClick, disabled, children }: {
 export function AppBgBtn({ color, label, active, onClick, comingSoon }: {
   color: string; label: string; active: boolean; onClick: () => void; comingSoon?: boolean
 }) {
+  const surface = useSurface()
   return (
     <button onClick={comingSoon ? undefined : onClick} style={{
-      flex: 1, padding: '6px 4px', borderRadius: 4,
+      flex: 1, padding: surface === 'window' ? '6px 14px' : '6px 4px', borderRadius: 4,
       border: active ? '1px solid var(--accent-amber-strong)' : '1px solid var(--border2)',
       background: active ? 'var(--accent-amber-medium)' : 'var(--bg-modal)',
       color: active ? 'var(--text-amber)' : 'var(--text-inactive)',
@@ -501,7 +515,7 @@ export function InlineIcon({ children }: { children: ReactNode }) {
 
 // ── At-a-glance line under a control (mono, dim) — Quick Settings + window
 export function GlanceLine({ children, center }: { children: ReactNode; center?: boolean }) {
-  return <div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-inactive)', fontFamily: 'var(--font-mono)', lineHeight: 1.5, textAlign: center ? 'center' : 'left' }}>{children}</div>
+  return <div style={{ marginTop: 5, fontSize: 10, color: 'var(--text-inactive)', fontFamily: 'var(--font-mono)', lineHeight: 1.5, textAlign: center ? 'center' : 'left', whiteSpace: 'pre-line' }}>{children}</div>
 }
 
 // ── Preview strip (note names, chord spellings) — same look as before
@@ -516,7 +530,7 @@ export function SubLabel({ children }: { children: ReactNode }) {
 
 // ── Italic helper text inside a card's follow-up options
 export function HelpText({ children }: { children: ReactNode }) {
-  return <div style={{ marginTop: 6, fontSize: 'var(--text-xs)', color: 'var(--text-faint)', lineHeight: 1.5, fontFamily: 'var(--font-ui)', fontStyle: 'italic' }}>{children}</div>
+  return <div style={{ marginTop: 6, fontSize: 'var(--text-xs)', color: 'var(--text-faint)', lineHeight: 1.5, fontFamily: 'var(--font-ui)', fontStyle: 'italic', whiteSpace: 'pre-line' }}>{children}</div>
 }
 
 // ── Piano-roll zoom — − / step dots / + (moved from the drawer unchanged)
@@ -566,7 +580,7 @@ export function RollZoomStepper() {
 export function DevModeBadge({ placement = 'top' }: { placement?: 'left' | 'right' | 'top' | 'bottom' }) {
   if (!simAvailable) return null
   return (
-    <Tooltip title="Dev mode" description={"Test tools are on: the dashed \"test builds only\"\npanels in Settings. Ctrl+Alt+Shift+D\nswitches them on and off."} placement={placement}>
+    <Tooltip title="Dev mode" description={"Test tools are on: Settings › Dev Tools.\nCtrl+Alt+Shift+D switches them\non and off."} placement={placement}>
       <span style={{ color: 'var(--text-amber)', fontSize: 9, fontFamily: 'var(--font-mono)', letterSpacing: '0.05em', whiteSpace: 'nowrap', cursor: 'default' }}>DEV MODE</span>
     </Tooltip>
   )
@@ -605,7 +619,7 @@ export function UpdateButton({ placement = 'left', showStatus = true }: { placem
     <>
       {showStatus && updateInfo.mode === 'auto' && updateStatus.state === 'up-to-date' && (
         <span style={{ fontSize: 9, color: 'var(--text-faint)', fontFamily: 'var(--font-ui)', whiteSpace: 'nowrap' }}>
-          Orfeo is up to date
+          {t`Orfeo is up to date`}
         </span>
       )}
       {showStatus && updateInfo.mode === 'auto' && updateStatus.state === 'ready' && (
@@ -618,10 +632,10 @@ export function UpdateButton({ placement = 'left', showStatus = true }: { placem
           updateStatus.state === 'available'   ? t`Orfeo ${updateStatus.version ?? ''} is out. Click to download` :
           updateInfo.mode === 'manual'         ? t`Check for updates on orfeo.cc` :
           updateInfo.mode === 'store'          ? t`Updates come from the Microsoft Store — click to open Orfeo there` :
-          updateStatus.state === 'checking'    ? 'Checking for updates…' :
-          updateStatus.state === 'downloading' ? `Downloading update${updateStatus.percent ? ` — ${Math.round(updateStatus.percent)}%` : '…'}` :
-          updateStatus.state === 'ready'       ? `Update ${updateStatus.version ?? ''} ready — click to restart and install` :
-          updateStatus.state === 'error'       ? `${(updateStatus.message ?? 'Update check failed').slice(0, 160)} — click to open the download page` :
+          updateStatus.state === 'checking'    ? t`Checking for updates…` :
+          updateStatus.state === 'downloading' ? t`Downloading update${updateStatus.percent ? ` — ${Math.round(updateStatus.percent)}%` : '…'}` :
+          updateStatus.state === 'ready'       ? t`Update ${updateStatus.version ?? ''} ready — click to restart and install` :
+          updateStatus.state === 'error'       ? t`${(updateStatus.message ?? 'Update check failed').slice(0, 160)} — click to open the download page` :
           t`Check for updates`
         }
         oneLine

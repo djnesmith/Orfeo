@@ -34,8 +34,7 @@ docs/ROADMAP.md
 docs/Track Color System.md
 docs/UI_STRINGS_AUDIT.md
 docs/tree.txt
-docs/I18N_PLAN.md
-docs/i18n-prep/
+docs/Weblate/
 docs/DESIGN_AUDIT_*.md
 docs/2026-08-01-practice-mode-plan.md
 docs/Final polish for public release/
@@ -63,10 +62,13 @@ DESIGN.md
 
 # ── CDP dev-debug helper scripts — local testing tools, not shipped app code ─
 scripts/dev-debug/
+# Recording what Synthesia sends to lighted keyboards (docs/IDEA-lit-keys-synthesia-capture.md)
+scripts/lit-keys-capture/
 .worktrees/
 
 # ── Chord-detection library audit — dev tooling + generated reports ─────────
 scripts/chord-audit/
+scripts/hand-audit/
 
 # ── Playwright MCP — local browser-testing artifacts, not shipped app code ──
 .playwright-mcp/

@@ -30,6 +30,7 @@ feature list see the [README](../README.md).
 - [Piano-roll hit effects](#piano-roll-hit-effects)
 - [Auto-update](#auto-update)
 - [Note-naming systems](#note-naming-systems)
+- [Translations](#translations)
 - [Build and packaging](#build-and-packaging)
 
 ---
@@ -294,6 +295,28 @@ each key press.
   the device last played; Settings lists them all, with *listen to all / only
   ticked*. The first time a device is ever seen, the Settings window opens on
   *MIDI Keyboard* (once per device, `seenDevices`).
+- **Keyboard range.** MIDI never reports how many keys a keyboard has, so any
+  connected device with no known range is asked once
+  (`components/KeyboardRangePrompt.tsx`): lowest key, then highest. The two
+  presses are read in `handleMessage` before the listen filter, so a keyboard
+  not listened to can still answer. Ranges are kept per device in
+  `keyRanges` (skipped ones in `rangeAsked`); simulated keyboards only for the
+  session. The prompt waits for a running tour, and the first-connection
+  Settings window waits for the prompt. `utils/keyboardRange.ts`
+  `fitKeyboardSize` picks the smallest on-screen size (61 / 73 / 88) holding
+  the range, applied once per keyboard played so a size chosen by hand stays.
+  Outside practice mode only; practice mode keeps 88 keys.
+- **Key lights.** `hooks/keyLightsOutput.ts` lights the player's own keyboard
+  with the song notes the on-screen keyboard shows (`activeKeys` /
+  `activeKeyColors`, minus the player's own keys), sending only the changes,
+  once per burst of note changes (a microtask, so it keeps going with the
+  window in the background). Per device (`keyLights`, default from
+  `utils/keyLights.ts` `defaultSetup`): *off*, *notes* (note on velocity 1 /
+  note off on one channel) or *partykeys* (its open SysEx LED protocol, per-key
+  RGB). It sends to the output with the input's model name (`outputFor`).
+  Light notes a keyboard echoes back are dropped in `handleMessage`
+  (`utils/keyLightEcho.ts`). MIDI access asks for SysEx, falling back
+  without it.
 - **Note path.** Sound first, display second: the handler calls the engine's
   `liveNoteOn` straight away, then updates `activeKeys` / `midiHeldKeys`. A
   store update runs every subscriber synchronously, and none of that should
@@ -339,6 +362,19 @@ each key press.
 
 `midiParser.ts` also reads Orfeo's own meta events (see next section) so a file
 re-opened in Orfeo restores its key, track names, colours, and edit history.
+
+alphaTab keeps a piano/organ's whole grand staff on one track and one shared
+channel (`playbackInfo` lives once per `Track`, not per `Staff`), and never
+writes a track-name meta event at all — unlike a notation program's own MIDI
+export, which always splits a grand staff into two tracks. Before generation,
+`foreignFormatImport.ts` splits any multi-staff piano/organ track into one
+track per staff, each kept on the track's original channel, and sets the
+output file to SMF Type 1 (`MidiFileFormat.MultiTrack`) — alphaTab defaults to
+Type 0, which would otherwise multiplex same-channel tracks back into one
+indistinguishable stream on write. This restores the shape
+`findStavePairs()` (see "Hand-assignment engine" below) looks for, so an
+imported file's hands come from its staves exactly as a native MIDI export's
+would, instead of falling back to the generic per-track guess.
 
 ---
 
@@ -589,11 +625,35 @@ plays count in (`usePlayback.play`), never scrub blips or loop wraps.
 
 ## Hand-assignment engine
 
-`src/utils/handAssignment.ts` decides which hand plays each note. It is a
-cost-minimisation model: notes are clustered by onset, harmonic links are
-detected, and the assignment that minimises the total of movement cost, hand-
-switch cost, collision rate, and inversion cost is chosen, then isolated
-one-note flips are cleaned up.
+`src/utils/handAssignment.ts` decides which hand plays each note, one
+keyboard instrument at a time (`assignHandsByTrack`, used by the parser and the
+Playback Editor's save):
+
+- **Staves first.** `findStavePairs` finds the two tracks a notation program
+  writes for one two-staff instrument: named for the hands (RH / LH, treble /
+  bass), or the only two keyboard tracks on one channel, or the only two with
+  one name, and in both of the last two cases clearly apart in register and
+  hardly ever striking the same key together. Upper staff = right hand, lower
+  = left, confidence 1, never second-guessed.
+- **Every other keyboard track is its own instrument** (an organ, a second
+  piano, MuseScore's chord-symbol track) and gets its own hands from
+  `assignHands`. Tracks are never pooled across instruments.
+- **`assignHands(notes)`, one stream:** a stream that is visibly two tracks of
+  one instrument is labelled by average pitch; a single melodic line (two notes
+  sounding together less than 15 % of the time) goes to one hand by register;
+  anything else gets a **moving dividing line**: at each moment the line is
+  pulled toward the gap between the low and high group of the notes 1.5 s
+  either side (or, for an oom-pah / stride left hand — bass, chord and melody
+  as three groups, the bass and chord taking turns — above the chord),
+  register decides when one hand plays alone, and a Viterbi pass
+  balances that pull against how far the line moves, each hand's stretch and
+  finger count, and how often two neighbouring chord notes at that interval
+  belong to different hands. Confidence is the cost margin to the cheapest path
+  that splits the moment's notes differently.
+
+Accuracy is measured with the local hand audit (`scripts/hand-audit/`,
+gitignored: two-staff scores whose staves are the answer). Change the engine
+only against it, across all files, never for one song.
 
 Two presentation modes: **Practice** (a smoothly moving split line) and
 **Performance** (per-note hand tags). Live hardware input has an adjustable
@@ -603,7 +663,9 @@ split sensitivity.
 > The engine has a version constant, `HAND_ENGINE_VERSION`.
 > `scripts/check-hand-engine-version.mjs` runs on every `dev` / `build` and
 > fails the build if the constant was not bumped after the algorithm changed —
-> so files carrying stale hand tags can be detected and re-analysed.
+> so files carrying stale hand tags can be detected and re-analysed. A stale
+> saved hand map keeps the notes the user moved by hand (`handsToRestore`);
+> only the computed ones are worked out again.
 
 ---
 
@@ -789,6 +851,58 @@ Explorers:
 The accidentals toggle (♭ / ♯) is a separate setting, also remembered between
 sessions. All name formatting goes through `src/utils/noteNames.ts` — no
 component hardcodes English names.
+
+---
+
+## Translations
+
+A language can be chosen once enough of it is translated on Weblate. The rules,
+the downloading and the screens are separate pieces:
+
+```text
+src/i18n/readiness.ts      The rules: READY_SHARE (80 %), COUNT_MACHINE_DRAFTS,
+                           percentOf / isReadyNow / isReady / isCheckedReady,
+                           the status of each language and which to download.
+src/i18n/updates.ts        checkTranslations: at start-up and whenever Settings ›
+                           Language opens, at most one read an hour; Download
+                           now / Wait.
+src/i18n/validateCatalog.ts  Checks a downloaded catalog before it is used.
+src/i18n/languageNames.ts  Each language's name; menuItems.ts builds the menu list.
+src/i18n/translations.json Bundled snapshot of the record (see below).
+src/utils/i18n.ts          t(); the language is chosen once at start-up from the
+                           saved choice, downloaded words first. "Follow system"
+                           is the saved choice SYSTEM.
+electron/translations.ts   Main process: Weblate API, the record on the stats
+                           branch, downloads into <userData>/translations, and
+                           the start-up snapshot handed to the renderer over
+                           synchronous IPC (so the first paint is already in
+                           the right language).
+src/components/Settings/defs/language.tsx   Settings › Language.
+src/components/Transport/LanguageSwitcher.tsx  The menu under the logo.
+tools/stats/translations.py  Daily record on the stats branch (a step of the
+                           Stats workflow, run once, on main).
+scripts/i18n-ready.mjs     `npm run i18n:ready`, at release: writes the
+                           shipped words (src/i18n/shipped/, checked texts
+                           only, read by src/i18n/catalogs.ts) from Weblate
+                           (src/i18n/locales/ is Weblate's own copy with the
+                           machine drafts, never read by the app or written
+                           here) and the bundled
+                           snapshot in the same run (rules in
+                           src/i18n/releaseWords.ts), so the snapshot's age of
+                           each language's words is the age of the words that
+                           ship.
+```
+
+Two rules matter:
+
+- **Once ready, always ready.** A language that has reached the share keeps its
+  `readySince` in the record (or its code in the local seen-ready list), so a
+  later dip in the percentage, or being offline, never takes it away. That
+  lasting record counts **checked texts only** (`isCheckedReady`).
+- **Machine drafts don't count.** `COUNT_MACHINE_DRAFTS = false`: drafts
+  ("needs editing" on Weblate) are suggestions for translators only and never
+  make a language ready. Effect names (Chorus, Reverb, Compressor, Limiter) and Master are
+  plain strings, not `t`, so they stay in English in every language.
 
 ---
 

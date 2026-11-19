@@ -1,5 +1,5 @@
 import { useEffect, useState, useReducer, useRef, useCallback, useMemo } from 'react'
-import { PenLine, SquareDashed, CircleDashed, Hand, WholeWord, Music4, Save, Magnet } from 'lucide-react'
+import { PenLine, SquareDashed, CircleDashed, Hand, WholeWord, Music4, Save, Magnet, Play, Pause, Check } from 'lucide-react'
 import { useStore } from '../../store'
 import { NES, buildNoteEditSummary, type NETool } from '../../utils/noteEditorState'
 import { confirmDialog } from '../../utils/confirmController'
@@ -14,6 +14,10 @@ import { getPianoRollAreaRect, getPianoRollCenterX } from '../../utils/modalAnch
 import { modalCloseButtonStyle, modalCloseButtonHoverColor, modalCloseButtonIdleColor } from '../../utils/modalCloseButtonStyle'
 import { HAND_ASSIGN_GROUPS } from '../../utils/keyboardGroups'
 import OrfeoMark from '../OrfeoMark'
+import { t } from '../../utils/i18n'
+import { keepUnsavedAround } from '../../utils/sessionSave'
+import { getLowConfidencePassages, estimateHandAccuracy } from '../../utils/handPreview'
+import { goToPassage, togglePassagePlay, markPassageCorrect, fixPassageByHand } from '../../utils/handCheck'
 
 // ── Toolbar SVG icons ─────────────────────────────────────────────────────────
 const IconVelocity = () => (
@@ -66,6 +70,8 @@ export default function NoteEditorToolbar() {
   // to hovering inside the panel — the piano roll's own hover hints
   // (NES.hoverHint) are untouched. ───────────────────────────────────────
   const [iconHint, setIconHint] = useState<string | null>(null)
+  // the passage-check choices (Play, The hands are right, Fix by hand) show theirs all in amber
+  const [iconHintAmber, setIconHintAmber] = useState(false)
   const quantizeBtnRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -111,8 +117,11 @@ export default function NoteEditorToolbar() {
   }, [noteEditorEnabled, noteEditorActive, setNoteEditorActive])
 
   // ── Save handler — shown as a button in the toolbar, also registered on NES ──
-  // Returns true on successful save, false if cancelled or failed.
-  const handleSave = useCallback(async (): Promise<boolean> => {
+  // Returns true on successful save, false if cancelled or failed. The save
+  // reloads the song; keepUnsavedAround puts the player's other unsaved
+  // changes (Mixer, tempo & key, shown / lights / mute) back on top of it.
+  const handleSave = useCallback((): Promise<boolean> => keepUnsavedAround(saveNoteEdits, new Set(['notes'])), [])
+  const saveNoteEdits = async (): Promise<boolean> => {
     const sourcePath = (useStore.getState().midi as any)?._filePath as string | undefined
     if (!sourcePath || !NES.editMidi) return false
 
@@ -212,7 +221,7 @@ export default function NoteEditorToolbar() {
       }, 0)
     }
     return true
-  }, [])
+  }
 
   // ── Register save handler on NES so SettingsPanel and app-close can call it ──
   useEffect(() => {
@@ -356,9 +365,9 @@ export default function NoteEditorToolbar() {
   const doReset = async () => {
     if (NES.dirty) {
       const choice = await confirmDialog({
-        title: 'Reset Note Editor',
-        message: 'Discard all changes in this editing session?',
-        buttons: ['Discard', 'Cancel'],
+        title: t`Reset Note Editor`,
+        message: t`Discard all changes in this editing session?`,
+        buttons: [t`Discard`, t`Cancel`],
         destructiveIndex: 0,
       })
       if (choice !== 0) return
@@ -390,6 +399,23 @@ export default function NoteEditorToolbar() {
   // others while doing it. Turning it back off restores whatever was
   // visible before — the isolation is scoped to Hand mode, not a permanent
   // visibility change. ──────────────────────────────────────────────────
+  // ── Hand mode is on whenever the editor opens: players come here to fix the
+  // piano's hands. It goes to the piano (or organ) track, unless the editor
+  // was opened on another kind of track, which stays as it is. ─────────────
+  useEffect(() => {
+    if (NES.reassignHandsMode) return
+    const eligible = (tr: { group: string; isDrum?: boolean }) => HAND_ASSIGN_GROUPS.has(tr.group) && !tr.isDrum
+    const solo = noteEditorSoloTrackIndex !== null ? tracks.find(tr => tr.index === noteEditorSoloTrackIndex) : undefined
+    if (solo && !eligible(solo)) return
+    const kbTrack = solo ?? tracks.find(eligible)
+    if (!kbTrack) return
+    NES.reassignHandsMode = true
+    setReassignHandsDisplay(true)
+    if (noteEditorSoloTrackIndex !== kbTrack.index) soloTrackForEdit(kbTrack.index, { keepPlayhead: true })
+  // once, as the editor opens
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const toggleReassignHands = () => {
     const next = !NES.reassignHandsMode
     NES.reassignHandsMode = next
@@ -412,10 +438,10 @@ export default function NoteEditorToolbar() {
   // PianoRoll's updateHoverState reports it, falling back to a per-tool
   // idle blurb when the cursor is outside the roll (NES.defaultHint). ──────
   const toolTooltip: Record<NETool, [string, string]> = {
-    select: ['Select — click/shift-click notes, drag to move/resize', 'Drag empty space to pan · Shift+wheel to scrub finely'],
-    pen:    ['Pen — Alt+click empty space to add a note', 'Click a note to mark it for delete'],
-    marquee:['Marquee — drag a box over a cluster to select it', 'Shift+drag adds to the current selection'],
-    lasso:  ['Lasso — drag through notes to select them', 'Shift+drag adds to the current selection'],
+    select: [t`Select — click/shift-click notes, drag to move/resize`, t`Drag empty space to pan · Shift+wheel to scrub finely`],
+    pen:    [t`Pen — Alt+click empty space to add a note`, t`Click a note to mark it for delete`],
+    marquee:[t`Marquee — drag a box over a cluster to select it`, t`Shift+drag adds to the current selection`],
+    lasso:  [t`Lasso — drag through notes to select them`, t`Shift+drag adds to the current selection`],
   }
   const [tipLine1, tipLine2] = toolTooltip[activeTool]
 
@@ -443,7 +469,7 @@ export default function NoteEditorToolbar() {
     <div
       ref={panelRef}
       role="toolbar"
-      aria-label="Note Editor toolbar"
+      aria-label={t`Note Editor toolbar`}
       className="orfeo-modal-glow"
       style={{
         position: 'fixed',
@@ -485,21 +511,21 @@ export default function NoteEditorToolbar() {
             color: 'var(--text-amber)', textTransform: 'uppercase',
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>
-            MIDI NOTE EDITOR
+            {t`MIDI NOTE EDITOR`}
           </span>
         </div>
         <div style={{
           fontSize: 11, color: 'var(--text-muted)', textAlign: 'center',
           whiteSpace: 'normal', lineHeight: 1.3,
         }}>
-          Click a track in the Tracks panel to solo it for editing
+          {t`Click a track in the Tracks panel to solo it for editing`}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
           <button
             onMouseDown={e => e.stopPropagation()}
             onClick={() => void doClose()}
             style={modalCloseButtonStyle}
-            onMouseEnter={e => { e.currentTarget.style.color = modalCloseButtonHoverColor; setIconHint('Close — exit edit mode') }}
+            onMouseEnter={e => { e.currentTarget.style.color = modalCloseButtonHoverColor; setIconHint(t`Close — exit edit mode`) }}
             onMouseLeave={e => { e.currentTarget.style.color = modalCloseButtonIdleColor; setIconHint(null) }}
           >
             ✕
@@ -511,27 +537,27 @@ export default function NoteEditorToolbar() {
           between them, instead of stacked rows that fought the panel for
           height and made the tooltip row below feel cramped. ─────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', height: 40, padding: '4px 8px', gap: 10, borderTop: '1px solid var(--state-hover-bg)' }}>
-        <span style={rowLabelStyle}>TOOLS</span>
-        <ToolBtn active={activeTool === 'marquee'} onClick={() => setTool('marquee')} onHint={setIconHint} hint="Marquee — drag a box over a cluster to select it">
+        <span style={rowLabelStyle}>{t`TOOLS`}</span>
+        <ToolBtn active={activeTool === 'marquee'} onClick={() => setTool('marquee')} onHint={setIconHint} hint={t`Marquee — drag a box over a cluster to select it`}>
           <SquareDashed size={13} />
         </ToolBtn>
-        <ToolBtn active={activeTool === 'lasso'} onClick={() => setTool('lasso')} onHint={setIconHint} hint="Freehand select — drag through notes to select them">
+        <ToolBtn active={activeTool === 'lasso'} onClick={() => setTool('lasso')} onHint={setIconHint} hint={t`Freehand select — drag through notes to select them`}>
           <CircleDashed size={13} />
         </ToolBtn>
-        <ToolBtn active={activeTool === 'pen'} onClick={() => setTool('pen')} onHint={setIconHint} hint="Pen — Alt+click to add, click a note to mark for delete">
+        <ToolBtn active={activeTool === 'pen'} onClick={() => setTool('pen')} onHint={setIconHint} hint={t`Pen — Alt+click to add, click a note to mark for delete`}>
           <PenLine size={13} />
         </ToolBtn>
-        <button onClick={doUndo} disabled={!canUndo} {...hintHandlers('Undo — revert the last edit (Ctrl+Z)')} style={iconBtnStyle(!canUndo)}><span style={{ display: 'inline-block', transform: 'rotate(-45deg)' }}>↺</span></button>
-        <button onClick={doRedo} disabled={!canRedo} {...hintHandlers('Redo — reapply the last undone edit (Ctrl+Y)')} style={iconBtnStyle(!canRedo)}><span style={{ display: 'inline-block', transform: 'rotate(45deg)' }}>↻</span></button>
+        <button onClick={doUndo} disabled={!canUndo} {...hintHandlers(t`Undo — revert the last edit (Ctrl+Z)`)} style={iconBtnStyle(!canUndo)}><span style={{ display: 'inline-block', transform: 'rotate(-45deg)' }}>↺</span></button>
+        <button onClick={doRedo} disabled={!canRedo} {...hintHandlers(t`Redo — reapply the last undone edit (Ctrl+Y)`)} style={iconBtnStyle(!canRedo)}><span style={{ display: 'inline-block', transform: 'rotate(45deg)' }}>↻</span></button>
 
         <div style={{ flex: 1 }} />
 
-        <span style={rowLabelStyle}>MODES</span>
-        <ToolBtn active={showNoteNames} onClick={toggleNoteNames} onHint={setIconHint} hint="Note names — show pitch labels on notes">
+        <span style={rowLabelStyle}>{t`MODES`}</span>
+        <ToolBtn active={showNoteNames} onClick={toggleNoteNames} onHint={setIconHint} hint={t`Note names — show pitch labels on notes`}>
           <WholeWord size={16} />
         </ToolBtn>
 
-        <ToolBtn active={reassignHands} onClick={toggleReassignHands} onHint={setIconHint} hint="Reassign hands — show LH/RH colors and enable Assign LH/RH">
+        <ToolBtn active={reassignHands} onClick={toggleReassignHands} onHint={setIconHint} hint={t`Reassign hands — show LH/RH colors and enable Assign LH/RH`}>
           <Hand size={13} />
         </ToolBtn>
 
@@ -539,7 +565,7 @@ export default function NoteEditorToolbar() {
             amber only while the lane is actually open. ────────────────── */}
         <button
           onClick={() => setVelocityPanelOpen(!velocityPanelOpen)}
-          {...hintHandlers(velocityPanelOpen ? 'Velocity lane — hide the velocity editor' : noteEditorSoloTrackIndex !== null ? 'Velocity lane — edit velocity for the soloed track' : 'Velocity lane — solo a track to edit its velocity')}
+          {...hintHandlers(velocityPanelOpen ? t`Velocity lane — hide the velocity editor` : noteEditorSoloTrackIndex !== null ? t`Velocity lane — edit velocity for the soloed track` : t`Velocity lane — solo a track to edit its velocity`)}
           style={{
             ...btnBase,
             width: 28, padding: 0, justifyContent: 'center',
@@ -556,7 +582,7 @@ export default function NoteEditorToolbar() {
           <IconVelocity />
         </button>
 
-        <ToolBtn active={snapEnabled} onClick={() => setSnap(!snapEnabled)} onHint={setIconHint} hint={snapEnabled ? 'Snap ON — moving, resizing or adding a note rounds its timing to the grid' : 'Snap OFF — moved/resized/added notes keep their exact dragged timing'}>
+        <ToolBtn active={snapEnabled} onClick={() => setSnap(!snapEnabled)} onHint={setIconHint} hint={snapEnabled ? t`Snap ON — moving, resizing or adding a note rounds its timing to the grid` : t`Snap OFF — moved/resized/added notes keep their exact dragged timing`}>
           <Magnet size={13} />
         </ToolBtn>
 
@@ -566,7 +592,7 @@ export default function NoteEditorToolbar() {
             onClick={openQuantize}
             aria-haspopup="listbox"
             aria-expanded={quantizeOpen}
-            {...hintHandlers(`Quantize grid — the grid unit Snap rounds to (currently 1/${quantize}); has no effect while Snap is off`)}
+            {...hintHandlers(t`Quantize grid — the grid unit Snap rounds to (currently 1/${quantize}); has no effect while Snap is off`)}
             style={{ ...btnBase, minWidth: 44, gap: 6, fontFamily: 'var(--font-mono)', fontSize: 10 }}
           >
             <Music4 size={12} color="var(--text-amber)" />
@@ -575,7 +601,7 @@ export default function NoteEditorToolbar() {
           {quantizeOpen && (
             <div
               role="listbox"
-              aria-label="Quantize grid resolution"
+              aria-label={t`Quantize grid resolution`}
               onMouseDown={e => e.stopPropagation()}
               style={{
                 position: 'fixed',
@@ -609,6 +635,9 @@ export default function NoteEditorToolbar() {
         </div>
       </div>
 
+      {/* ── Hands: step through the passages worth a look (Hand mode only) ── */}
+      {reassignHands && <HandPassagesRow onHint={(h, amber) => { setIconHint(h); setIconHintAmber(!!h && !!amber) }} />}
+
       {/* ── Row 3: dynamic tooltip (left, ~2/3) + Reset/Save (right, ~1/3) ──
           Both columns are fixed-fraction (flex-basis on a fixed-width
           parent), never resizing the panel itself. The tooltip column is a
@@ -623,7 +652,7 @@ export default function NoteEditorToolbar() {
           height: '2.8em', overflow: 'hidden',
         }}>
           {iconHint ? (
-            <div>{renderTip(iconHint)}</div>
+            iconHintAmber ? <div style={{ color: 'var(--text-amber)' }}>{iconHint}</div> : <div>{renderTip(iconHint)}</div>
           ) : (
             <>
               <div>{renderTip(tipLine1)}</div>
@@ -642,21 +671,21 @@ export default function NoteEditorToolbar() {
               color: 'var(--text-muted)', borderColor: 'var(--border2)', background: 'transparent',
               whiteSpace: 'nowrap', padding: '0 4px', transition: 'all 0.12s',
             }}
-            onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-amber)'; e.currentTarget.style.borderColor = 'var(--accent-amber-strong)'; setIconHint('Reset — discard all edits and restore original') }}
+            onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-amber)'; e.currentTarget.style.borderColor = 'var(--accent-amber-strong)'; setIconHint(t`Reset — discard all edits and restore original`) }}
             onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.borderColor = 'var(--border2)'; setIconHint(null) }}
           >
-            Reset
+            {t`Reset`}
           </button>
           <button
             onClick={() => void handleSave()}
-            {...hintHandlers('Save & Reload — save edits as a new versioned copy (_ORFEO_vN)')}
+            {...hintHandlers(t`Save & Reload — save edits as a new versioned copy (_ORFEO_vN)`)}
             style={{
               ...btnBase, flex: 1, justifyContent: 'center', fontSize: 12, fontWeight: 600,
               color: 'var(--text-near-black)', border: 'none', background: 'var(--text-amber)',
               whiteSpace: 'nowrap', padding: '0 4px', gap: 5,
             }}
           >
-            <Save size={12} /> Save &amp; Reload
+            <Save size={12} /> {t`Save & Reload`}
           </button>
         </div>
       </div>
@@ -670,25 +699,25 @@ export default function NoteEditorToolbar() {
           background: 'var(--accent-amber-tint-bg)',
         }}>
           <span style={{ fontSize: 11, color: 'var(--text-muted)', flexShrink: 0 }}>
-            Unsaved changes —
+            {t`Unsaved changes —`}
           </span>
           <button
             onClick={() => void doConfirmSaveAndClose()}
             style={{ ...btnBase, borderColor: 'var(--accent-amber-active-border)', color: 'var(--text-amber)', background: 'var(--accent-amber-active-bg)', fontSize: 11 }}
           >
-            Save & Exit
+            {t`Save & Exit`}
           </button>
           <button
             onClick={doConfirmDiscardAndClose}
             style={{ ...btnBase, borderColor: 'var(--status-error-border)', color: 'var(--status-error)', fontSize: 11 }}
           >
-            Discard
+            {t`Discard`}
           </button>
           <button
             onClick={() => setShowCloseConfirm(false)}
             style={{ ...btnBase, fontSize: 11 }}
           >
-            Cancel
+            {t`Cancel`}
           </button>
         </div>
       )}
@@ -749,6 +778,99 @@ function ToolBtn({ active, onClick, hint, onHint, children, wide }: {
     >
       {children}
     </button>
+  )
+}
+
+// ── Passages worth a look ─────────────────────────────────────────────────────
+// The soloed piano's passages where Orfeo was least sure of the hands (the
+// same ones the Playback Editor marks). ‹ › loop the previous / next one; while
+// one is looped, a line under the row says what to do and three buttons sit at
+// the right below it (Play, The hands are right, Fix by hand: utils/handCheck.ts).
+// Hidden when nothing is marked or the
+// hands come from a score's two staves.
+function HandPassagesRow({ onHint }: { onHint: (h: string | null, amber?: boolean) => void }) {
+  const midi = useStore(s => s.midi)
+  const solo = useStore(s => s.noteEditorSoloTrackIndex)
+  const hc = useStore(s => s.handCheck)
+  const rev = useStore(s => s.handCheckRev)
+  const playing = useStore(s => s.playbackState === 'playing')
+  const barStarts = useStore(s => s.barStarts)
+  const notes = useMemo(() => midi?.tracks.find(tr => tr.index === solo)?.notes ?? [], [midi, solo])
+  const passages = useMemo(() => getLowConfidencePassages(notes), [notes, rev])
+  const estimate = useMemo(() => estimateHandAccuracy(notes), [notes, rev])
+  const fromScore = !!(midi as any)?._stavePairs?.some((pr: [number, number]) => solo !== null && pr.includes(solo))
+  if (solo === null || fromScore || passages.length === 0) return null
+
+  const checking = hc && hc.track === solo ? hc : null
+  const at = checking ? checking.index : -1
+  const p = checking ? passages[at] : undefined
+  const barOf = (time: number) => { let b = 0; for (let i = 0; i < barStarts.length; i++) if (barStarts[i] <= time + 1e-6) b = i; return b + 1 }
+  const bars = p ? (barOf(p.start) === barOf(p.end) ? t`bar ${barOf(p.start)}` : t`bars ${barOf(p.start)}–${barOf(p.end)}`) : ''
+  const choice = (primary: boolean): React.CSSProperties => ({
+    ...btnBase, gap: 5, fontWeight: 600,
+    ...(primary
+      ? { background: 'var(--text-amber)', border: '1px solid var(--text-amber)', color: 'var(--bg-modal-header)' }
+      : { color: 'var(--text-amber)', borderColor: 'var(--accent-amber-active-border)' }),
+  })
+  return (
+    // Two columns: on the left the HANDS label with the words under it; on the
+    // right the passage controls at the top and, while checking, the three
+    // choices at the bottom right
+    <div style={{ borderTop: '1px solid var(--state-hover-bg)', display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto',
+      columnGap: 16, padding: '8px 8px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+      <span style={{ ...rowLabelStyle, lineHeight: '26px' }}>{t`HANDS`}</span>
+      {/* one paragraph: how sure Orfeo is, then (while checking) what to do */}
+      <p style={{ margin: 0, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.45 }}>
+        {estimate !== null
+          ? (passages.length === 1
+            ? t`The hands are about ${estimate}% likely right, with 1 passage worth a look.`
+            : t`The hands are about ${estimate}% likely right, with ${passages.length} passages worth a look.`)
+          : (passages.length === 1 ? t`1 passage is worth a look.` : t`${passages.length} passages are worth a look.`)}
+        {checking && ' '}
+        {checking && (checking.panel
+          ? t`Orfeo isn't sure about the hands in this one: listen to the loop, then keep them or fix them.`
+          : t`Fix the hands on the piano roll: select notes, right-click and choose Assign to Left Hand or Right Hand, then go on with ›.`)}
+      </p>
+    </div>
+    <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'flex-end', gap: 10 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {checking ? (
+        <>
+          <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-amber)', whiteSpace: 'nowrap' }}>
+            {t`Passage ${at + 1} of ${passages.length}`} · {bars}
+          </span>
+          <button onClick={() => goToPassage(solo, at - 1)} disabled={at <= 0}
+            onMouseEnter={() => onHint(t`Previous passage — loop the passage before this one`)} onMouseLeave={() => onHint(null)}
+            style={iconBtnStyle(at <= 0)}>‹</button>
+          <button onClick={() => goToPassage(solo, at + 1)} disabled={at >= passages.length - 1}
+            onMouseEnter={() => onHint(t`Next passage — loop the next passage worth a look`)} onMouseLeave={() => onHint(null)}
+            style={iconBtnStyle(at >= passages.length - 1)}>›</button>
+        </>
+      ) : (
+        <button onClick={() => goToPassage(solo, 0)}
+          onMouseEnter={() => onHint(t`Check the passages — loop each one and decide: keep the hands or fix them`)} onMouseLeave={() => onHint(null)}
+          style={{ ...btnBase, color: 'var(--text-amber)', borderColor: 'var(--accent-amber-active-border)' }}>{t`Check the passages`}</button>
+      )}
+    </div>
+    {checking && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+          <button onClick={togglePassagePlay} style={choice(false)}
+            onMouseEnter={() => onHint(t`Play the passage on a loop, or pause it`, true)} onMouseLeave={() => onHint(null)}>
+            {playing ? <Pause size={12} /> : <Play size={12} />} {playing ? t`Pause` : t`Play`}
+          </button>
+          <button onClick={markPassageCorrect} style={choice(true)}
+            onMouseEnter={() => onHint(t`Keep the hands as they are and go to the next passage`, true)} onMouseLeave={() => onHint(null)}>
+            <Check size={12} /> {t`The hands are right`}
+          </button>
+          <button onClick={fixPassageByHand} style={choice(false)}
+            onMouseEnter={() => onHint(t`Stop the loop and fix the hands on the piano roll yourself`, true)} onMouseLeave={() => onHint(null)}>
+            <PenLine size={12} /> {t`Fix by hand`}
+          </button>
+        </div>
+    )}
+    </div>
+    </div>
   )
 }
 

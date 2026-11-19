@@ -1,6 +1,6 @@
 {
   "name": "orfeo",
-  "version": "1.7.3",
+  "version": "1.8.0",
   "description": "Modern piano learning app with MIDI visualization",
   "author": "SquareBow",
   "license": "SEE LICENSE IN LICENSE.md",
@@ -21,6 +21,7 @@
     "release:notes": "node scripts/release-notes.mjs",
     "native:build": "node scripts/build-native.mjs",
     "i18n:extract": "node scripts/i18n-extract.mjs",
+    "i18n:ready": "node --import ./scripts/ts-esbuild-hooks.mjs scripts/i18n-ready.mjs",
     "licenses": "node scripts/generate-licenses.mjs"
   },
   "build": {
@@ -95,6 +96,19 @@
     "asarUnpack": [
       "out/renderer/spessasynth_processor.min.js",
       "out/renderer/GeneralUser-GS.sf2"
+    ],
+    "fileAssociations": [
+      {
+        "ext": [
+          "mid",
+          "midi",
+          "kar"
+        ],
+        "name": "MIDI file",
+        "description": "MIDI file",
+        "mimeType": "audio/midi",
+        "role": "Viewer"
+      }
     ],
     "win": {
       "target": [

@@ -1,18 +1,22 @@
-import { useMemo, useState, useEffect, useLayoutEffect, useRef, type CSSProperties } from 'react'
+import { useMemo, useState, useEffect, useLayoutEffect, useRef, type CSSProperties, type ReactNode } from 'react'
 import { useStore } from '../../store'
-import { ArrowLeft, ArrowRight } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react'
 import { stepEvents } from '../../utils/stepThrough'
 import { t } from '../../utils/i18n'
 import Tooltip from '../Tooltip'
 import type { KeyboardSize } from '../../types'
 import { getWhiteKeys, noteToLeftPct, computeTaggedBoundaryCurve, interpolateTaggedCurve, type TaggedBoundarySample } from '../../utils/handBoundaries'
+import { STANDARD_SIZES, PORTABLE_SIZES, isPortableSize, octaveLimits } from '../../utils/keyLayout'
+import { targetRange } from '../../utils/keyView'
+import { getNoteLabel } from '../../utils/noteNames'
 
 // Exponential ease toward the curve's raw target — smooths the line's motion
 // between 0.25s samples instead of visibly stepping. Reaches ~90% of the way
 // there in ~200ms at 60fps.
 const SMOOTHING_FACTOR = 0.15
 
-const SIZES: KeyboardSize[] = [61, 73, 88]
+const SIZES: KeyboardSize[] = [...STANDARD_SIZES]
+const PORTABLE: KeyboardSize[] = [...PORTABLE_SIZES]
 
 // ── Smooth the raw curve boundary (in keyboard-%) toward its target every
 // frame — a plain per-sample lookup would visibly jump every 0.25s. Null
@@ -71,7 +75,9 @@ export default function KeyboardControls() {
   // averaged (not one static whole-file number) — see computeTaggedBoundaryCurve.
   // (Performance mode's indicator lives on the keys themselves — Keyboard.tsx —
   // reading each active note's own tag; nothing to render in this bar for it.)
-  const whiteKeys = useMemo(() => getWhiteKeys(keyboardSize), [keyboardSize])
+  const keyboardOctave = useStore((s) => s.keyboardOctave)
+  const portableKeyboards = useStore((s) => s.portableKeyboards)
+  const whiteKeys = useMemo(() => getWhiteKeys(targetRange({ keyboardSize, keyboardOctave })), [keyboardSize, keyboardOctave])
   const [taggedCurve, setTaggedCurve] = useState<TaggedBoundarySample[]>([])
   useEffect(() => { setTaggedCurve(computeTaggedBoundaryCurve(midi)) }, [midi])
   const rawBoundary = useMemo(() => interpolateTaggedCurve(taggedCurve, currentTime), [taggedCurve, currentTime])
@@ -136,9 +142,27 @@ export default function KeyboardControls() {
     >
       {/* ── Left: key size selector + dock/float toggle ──────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', justifySelf: 'start', minWidth: 0 }}>
+        {/* ── Portable keyboards (Settings › Keyboard): 25 / 37 / 49 keys first,
+            smallest to largest left to right, then a thin line and 61 / 73 / 88:
+            one row of six evenly spaced sizes. On 25 / 37 / 49 their octave
+            buttons ‹ C3–C5 › show at the far left; on 61 / 73 / 88 they take
+            no room at all (the user's call: no empty gap). ── */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}>
+          {portableKeyboards && <>
+            {isPortableSize(keyboardSize) && (
+              <span style={{ display: 'flex', marginRight: 'var(--space-2)' }}>
+                <OctaveControls size={keyboardSize} />
+              </span>
+            )}
+            {PORTABLE.map(n => (
+              <Tooltip key={n} title={t`Switch to ${n}-key layout`} oneLine>
+                <SizeButton active={keyboardSize === n} onClick={() => setKeyboardSize(n)}>{n}</SizeButton>
+              </Tooltip>
+            ))}
+            <div aria-hidden style={{ width: 1, height: 10, background: 'var(--border)' }} />
+          </>}
           {SIZES.map((size) => (
-            <Tooltip key={size} title={`Switch to ${size}-key layout`} oneLine>
+            <Tooltip key={size} title={t`Switch to ${size}-key layout`} oneLine>
             <button
               onClick={() => setKeyboardSize(size)}
               style={{
@@ -161,10 +185,10 @@ export default function KeyboardControls() {
 
         {/* ── Dock / Float toggle — hidden in Presentation Mode ────────────────── */}
         {!presentationMode && <Tooltip
-          title={isDocked ? (undockBlocked ? "Can't float yet" : 'Float keyboard') : 'Dock keyboard'}
+          title={isDocked ? (undockBlocked ? t`Can't float yet` : t`Float keyboard`) : t`Dock keyboard`}
           description={isDocked
-            ? (undockBlocked ? 'Close the open modal first — it shares the keyboard\'s anchor point.' : 'Detaches the keyboard so it can be moved and resized independently.')
-            : 'Reattaches the keyboard to the bottom of the window.'}
+            ? (undockBlocked ? t`Close the open modal first — it shares the keyboard's anchor point.` : t`Detaches the keyboard so it can be moved and resized independently.`)
+            : t`Reattaches the keyboard to the bottom of the window.`}
         >
         <button
           onClick={() => { if (isDocked && undockBlocked) return; setKeyboardMode(isDocked ? 'floating' : 'docked') }}
@@ -194,7 +218,7 @@ export default function KeyboardControls() {
               <line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/>
             </svg>
           )}
-          {isDocked ? 'Docked' : 'Floating'}
+          {isDocked ? t`Docked` : t`Floating`}
         </button>
         </Tooltip>}
       </div>
@@ -206,7 +230,7 @@ export default function KeyboardControls() {
           <span ref={hintRef} style={{ display: 'inline-flex', alignItems: 'center', gap: 28, transform: `translateX(${hintShift}px)` }}>
             {stepThroughEnabled && <StepArrow dir={-1} enabled={hasSong} />}
             <span style={{ fontSize: 11, color: 'var(--text-faint)', fontFamily: 'var(--font-ui)', userSelect: 'none', whiteSpace: 'nowrap' }}>
-              Shift+Click three keys or more to build &amp; lock a chord
+              {t`Shift+Click three keys or more to build & lock a chord`}
             </span>
             {stepThroughEnabled && <StepArrow dir={1} enabled={hasSong} />}
           </span>
@@ -241,10 +265,10 @@ export default function KeyboardControls() {
           <>
             <div style={{ ...lineStyle, left: `${pct}%` }} />
             <div style={{ ...labelBase, left: 0, width: `${pct}%`, justifyContent: 'flex-end', paddingRight: 6 }}>
-              <span style={textStyle}>Left Hand</span>
+              <span style={textStyle}>{t`Left Hand`}</span>
             </div>
             <div style={{ ...labelBase, left: `${pct}%`, right: 0, justifyContent: 'flex-start', paddingLeft: 'var(--space-2)' }}>
-              <span style={textStyle}>Right Hand</span>
+              <span style={textStyle}>{t`Right Hand`}</span>
             </div>
           </>
         )
@@ -255,8 +279,9 @@ export default function KeyboardControls() {
 
       {/* ── Presentation Mode toggle — replaces Docked/NoteCounter in PM footer ─ */}
       <Tooltip
-        title={presentationMode ? 'Exit Presentation Mode' : 'Presentation Mode'}
-        description={presentationMode ? 'Press Esc to leave, or click here.' : 'Distraction-free fullscreen view.\nF11 to open, Esc to close.'}
+        title={presentationMode ? t`Exit Presentation Mode` : t`Presentation Mode`}
+        description={presentationMode ? t`Press Esc to leave, or click here.` : t`Distraction-free fullscreen view.
+F11 to open, Esc to close.`}
       >
       <button
         onClick={() => setPresentationMode(!presentationMode)}
@@ -300,13 +325,74 @@ export default function KeyboardControls() {
   )
 }
 
+// ── Octave buttons for a portable size (25 / 37 / 49): ‹ C3–C5 › ─────────────
+function OctaveControls({ size }: { size: KeyboardSize }) {
+  const octave = useStore(s => s.keyboardOctave)
+  const naming = useStore(s => s.noteNaming)
+  const acc = useStore(s => s.accidentals)
+  const { down, up } = octaveLimits(size)
+  const r = targetRange({ keyboardSize: size, keyboardOctave: octave })
+  const names = naming === 'hidden' ? 'english' : naming
+  const shift = (d: number) => useStore.getState().setKeyboardOctave(octave + d)
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}>
+      <OctaveButton dir={-1} enabled={octave > down} onClick={() => shift(-1)} />
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 600, color: 'var(--text-default)', whiteSpace: 'nowrap', userSelect: 'none', minWidth: 50, textAlign: 'center' }}>
+        {`${getNoteLabel(r.min, names, acc)}–${getNoteLabel(r.max, names, acc)}`}
+      </span>
+      <OctaveButton dir={1} enabled={octave < up} onClick={() => shift(1)} />
+    </span>
+  )
+}
+
+function SizeButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        padding: '2px var(--space-2)', borderRadius: 4, background: 'transparent', border: 'none',
+        color: active ? 'var(--text-amber)' : 'var(--text-muted)',
+        fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)', fontWeight: 600,
+        cursor: 'pointer', transition: 'color 0.15s',
+      }}
+      onMouseEnter={e => { if (!active) e.currentTarget.style.color = 'var(--text-key-hover)' }}
+      onMouseLeave={e => { if (!active) e.currentTarget.style.color = 'var(--text-muted)' }}
+    >
+      {children}
+    </button>
+  )
+}
+
+function OctaveButton({ dir, enabled, onClick }: { dir: 1 | -1; enabled: boolean; onClick: () => void }) {
+  const Icon = dir === 1 ? ChevronRight : ChevronLeft
+  return (
+    <Tooltip title={dir === 1 ? t`Octave up` : t`Octave down`} oneLine>
+      <button
+        type="button"
+        aria-label={dir === 1 ? t`Octave up` : t`Octave down`}
+        disabled={!enabled}
+        onClick={(e) => { onClick(); e.currentTarget.blur() }}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, padding: 0,
+          background: 'none', border: 'none', borderRadius: 'var(--radius-sm, 3px)',
+          cursor: enabled ? 'pointer' : 'default',
+          // the end of the range: still clearly there, just not amber
+          color: enabled ? 'var(--text-amber)' : 'var(--text-muted)', opacity: enabled ? 1 : 0.55,
+        }}
+      >
+        <Icon size={14} strokeWidth={1.8} />
+      </button>
+    </Tooltip>
+  )
+}
+
 // ── Shows total note + track count when a file is loaded ─────────────────────
 function NoteCounter() {
   const midi = useStore((s) => s.midi)
   if (!midi) return null
   return (
     <span style={{ color: 'var(--text-inactive)', fontSize: 10, fontFamily: 'var(--font-mono)' }}>
-      {midi.noteCount.toLocaleString()} notes · {midi.tracks.length} tracks
+      {t`Notes: ${midi.noteCount.toLocaleString()} · Tracks: ${midi.tracks.length}`}
     </span>
   )
 }

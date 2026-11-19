@@ -6,9 +6,11 @@
 
 import React, { useEffect, useRef, useState, useCallback, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronUp, ChevronDown, ListOrdered } from 'lucide-react'
+import { ChevronUp, ChevronDown, ArrowDown01 } from 'lucide-react'
 import { useStore } from '../store'
 import Tooltip from './Tooltip'
+import { t } from '../utils/i18n'
+import { SaveBadge } from './Transport/SaveBadge'
 
 const STRIP_H       = 24
 const HANDLE_VIS_W  = 4   // drawn width — thin enough not to hide small selections
@@ -469,10 +471,11 @@ export default function LoopRegionStrip() {
     <>
       {/* ── Canvas — fills the shared 400px wrapper in TopBar ─────────────── */}
       <Tooltip
-        title={hasSelection ? 'Loop region set' : 'Select a bar range'}
+        title={hasSelection ? t`Loop region set` : t`Select a bar range`}
         description={hasSelection
-          ? 'Click outside the selection to clear it, or drag its handles to adjust.'
-          : 'Drag to select a bar range, or Alt+drag \non the waterfall above for precise timing.'}
+          ? t`Click outside the selection to clear it, or drag its handles to adjust.`
+          : t`Drag to select a bar range, or Alt+drag 
+on the waterfall above for precise timing.`}
         wrapperStyle={{ width: '100%', display: 'block' }}
       >
       <canvas
@@ -497,7 +500,7 @@ export default function LoopRegionStrip() {
           is what made this so easy to falsely "verify" as working. ────────── */}
       <div className="app-no-drag" style={{ position: 'absolute', left: 'calc(100% + 8px)', top: 0, height: STRIP_H, display: 'flex', alignItems: 'center', gap: 6 }}>
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Tooltip title="Select bar range" description="Type an exact start/end bar for the loop region.">
+          <Tooltip title={t`Select bar range`} description={t`Type an exact start/end bar for the loop region.`}>
           <button
             ref={iconBtnRef}
             onClick={handleIconClick}
@@ -511,7 +514,7 @@ export default function LoopRegionStrip() {
             onMouseEnter={e => { if (!hasSelection && !popupOpen) e.currentTarget.style.color = 'var(--text-muted)' }}
             onMouseLeave={e => { if (!hasSelection && !popupOpen) e.currentTarget.style.color = 'var(--text-inactive)' }}
           >
-            <ListOrdered size={14} strokeWidth={2} />
+            <ArrowDown01 size={14} strokeWidth={2} />
           </button>
           </Tooltip>
 
@@ -564,12 +567,12 @@ export default function LoopRegionStrip() {
               textTransform: 'uppercase',
               letterSpacing: '0.1em',
             }}>
-              Bar Range
+              {t`Bar Range`}
             </div>
 
             {/* From row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 10, color: 'var(--text-dimmest)', fontFamily: 'var(--font-ui)', minWidth: 28 }}>From</span>
+              <span style={{ fontSize: 10, color: 'var(--text-dimmest)', fontFamily: 'var(--font-ui)', minWidth: 28 }}>{t`From`}</span>
               <input
                 type="text"
                 inputMode="numeric"
@@ -601,7 +604,7 @@ export default function LoopRegionStrip() {
 
             {/* To row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 10, color: 'var(--text-dimmest)', fontFamily: 'var(--font-ui)', minWidth: 28 }}>To</span>
+              <span style={{ fontSize: 10, color: 'var(--text-dimmest)', fontFamily: 'var(--font-ui)', minWidth: 28 }}>{t`To`}</span>
               <input
                 type="text"
                 inputMode="numeric"
@@ -642,12 +645,16 @@ export default function LoopRegionStrip() {
               onMouseEnter={e => e.currentTarget.style.background = 'var(--accent-amber-strip-apply-bg-hover)'}
               onMouseLeave={e => e.currentTarget.style.background = 'var(--accent-amber-strip-apply-bg)'}
             >
-              Apply
+              {t`Apply`}
             </button>
           </div>,
           document.body,
         )}
         </div>
+        {/* The save badge sits after the bar-range icon and label, so a long
+            "bars 12–34" never runs into it (TopBar places it itself when this
+            strip is off) */}
+        <SaveBadge style={{ marginLeft: 8 }} />
       </div>
     </>
   )

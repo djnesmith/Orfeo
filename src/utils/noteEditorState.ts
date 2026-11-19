@@ -3,6 +3,7 @@ import { midiToEditableCopy } from './noteEditorCommands'
 import type { ToneNote } from './noteEditorCommands'
 import { confirmDialog } from './confirmController'
 import { useStore } from '../store'
+import { t } from './i18n'
 
 export type NEQuantize = 4 | 8 | 16 | 32
 
@@ -18,7 +19,7 @@ export type NETool = 'select' | 'pen' | 'marquee' | 'lasso'
 // NoteEditorToolbar — that's fine, this one is the idle fallback for the
 // context-aware row-3 hint (which changes with tool/hover/selection state),
 // not a duplicate of anything dynamic. ──────────────────────────────────────
-const DEFAULT_HINT = 'Nothing selected'
+const DEFAULT_HINT = t`Nothing selected`
 
 // ── NoteEditorState — module-level singleton bridging NoteEditorToolbar ↔ PianoRoll
 // Both components read/write this object; no prop threading needed.
@@ -106,7 +107,7 @@ export const NES = {
 // noteEditorCommands.ts already writes, rather than duplicating a `kind`
 // field. Batch commands (e.g. "Remove 3 notes") count their own N. ────────
 export function buildNoteEditSummary(descriptions: string[]): string {
-  let added = 0, removed = 0, moved = 0, repitched = 0, resized = 0, velocityChanged = 0, reassigned = 0
+  let added = 0, removed = 0, moved = 0, repitched = 0, resized = 0, velocityChanged = 0, reassigned = 0, confirmed = 0
   for (const d of descriptions) {
     const batchRemove = d.match(/^Remove (\d+) notes?$/)
     const batchVelocity = d.match(/^Set velocity on (\d+) notes/)
@@ -131,6 +132,8 @@ export function buildNoteEditSummary(descriptions: string[]): string {
     else if (d.startsWith('Velocity note')) velocityChanged++
     else if (batchAssign) reassigned += parseInt(batchAssign[1], 10)
     else if (d.startsWith('Assign left hand') || d.startsWith('Assign right hand')) reassigned++
+    // "The hands are right" in the passage check (utils/handCheck.ts)
+    else if (d.startsWith('Confirm hands in a passage')) confirmed++
   }
   const s = (n: number) => n === 1 ? '' : 's'
   const parts: string[] = []
@@ -141,6 +144,7 @@ export function buildNoteEditSummary(descriptions: string[]): string {
   if (resized > 0) parts.push(`resized ${resized} note${s(resized)}`)
   if (velocityChanged > 0) parts.push(`changed velocity on ${velocityChanged} note${s(velocityChanged)}`)
   if (reassigned > 0) parts.push(`reassigned hand on ${reassigned} note${s(reassigned)}`)
+  if (confirmed > 0) parts.push(`confirmed the hands in ${confirmed} passage${s(confirmed)}`)
   return parts.length > 0 ? parts.join(', ') : 'Saved'
 }
 
@@ -152,10 +156,10 @@ export function buildNoteEditSummary(descriptions: string[]): string {
 export async function confirmDiscardDirtyNoteEdits(message: string): Promise<boolean> {
   if (NES.dirty) {
     const choice = await confirmDialog({
-      title: 'Unsaved Changes',
+      title: t`Unsaved Changes`,
       message,
-      detail: 'Your note edits will be lost if you discard.',
-      buttons: ['Save', 'Discard', 'Cancel'],
+      detail: t`Your note edits will be lost if you discard.`,
+      buttons: [t`Save`, t`Discard`, t`Cancel`],
     })
     if (choice === 2) return false // Cancel
     if (choice === 0) {            // Save

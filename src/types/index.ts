@@ -104,6 +104,9 @@ export interface ParsedMidi {
   _origRaw?: ArrayBuffer
   _leadTick?: number
   _leadSec?: number
+  // ── The two staves of each keyboard instrument written as two tracks (track
+  // indices, upper first): the chord reading treats each pair as one instrument
+  _stavePairs?: [number, number][]
 }
 
 export type PlaybackState = 'stopped' | 'playing' | 'paused'
@@ -128,9 +131,13 @@ export interface TrackState {
   reverb: number
 }
 
-export type KeyboardSize = 61 | 73 | 88
+// 25, 37 and 49 are the portable sizes (Settings › Keyboard › Portable keyboards)
+export type KeyboardSize = 25 | 37 | 49 | 61 | 73 | 88
 export type KeyboardMode = 'docked' | 'floating'
-export type NoteNaming = 'english' | 'central-european' | 'solfege' | 'hidden'
+// 'sargam' names single notes on the keyboard and piano roll only (counted from Sa);
+// chord and key names stay Western, so everywhere else it reads as 'english'
+export type NoteNaming = 'english' | 'central-european' | 'solfege' | 'sargam' | 'hidden'
+export type SargamScript = 'latin' | 'devanagari'
 export type Accidentals = 'flat' | 'sharp'
 // ── Chord *type/quality* naming — orthogonal to NoteNaming (which governs
 // root-letter spelling). 'abbreviation' = "Bb(b5)", 'symbol' = "Bb(♭5)". ────
@@ -199,12 +206,13 @@ declare global {
       // Export to audio: writes to <library>/Orfeo/Exports, returns the saved path
       saveExport:          (songPath: string, libraryFolder: string | null, fileName: string, bytes: Uint8Array) => Promise<string>
       statFiles:           (paths: string[]) => Promise<{ path: string; size: number; mtime: number }[]>
+      checkLyrics:         (paths: string[]) => Promise<{ path: string; size: number; mtime: number; lyrics: boolean }[]>
       windowMinimize:      () => Promise<void>
       windowMaximize:      () => Promise<void>
       windowClose:         () => Promise<void>
       transcriptGenerate:  (midiPath: string, noteNaming: string, accidentals: string) => Promise<{ success: boolean; path?: string; error?: string }>
       saveFileDialog:      (opts: { defaultPath: string; filters: { name: string; extensions: string[] }[] }) => Promise<string | null>
-      saveMidiEditor:      (payload: { filePath: string; outputPath: string; includedTracks: { index: number; newProgram: number; name?: string; color?: string; splitHand?: 'L' | 'R'; visible?: boolean; showOnKeyboard?: boolean }[]; mergeGroups: number[][]; rhMaxFingers?: number; lhMaxFingers?: number; bpmRatio?: number; transposeSemitones?: number; finalKey?: { semitone: number; isMinor: boolean } }) => Promise<{ ok: boolean; message: string; filePath?: string; fileName?: string; base64?: string }>
+      saveMidiEditor:      (payload: { filePath: string; outputPath: string; includedTracks: { index: number; newProgram: number; name?: string; color?: string; splitHand?: 'L' | 'R'; visible?: boolean; showOnKeyboard?: boolean; muted?: boolean }[]; mergeGroups: number[][]; mixer?: { index: number; volume: number; pan: number; chorus: number; reverb: number }[]; rhMaxFingers?: number; lhMaxFingers?: number; bpmRatio?: number; transposeSemitones?: number; finalKey?: { semitone: number; isMinor: boolean } }) => Promise<{ ok: boolean; message: string; filePath?: string; fileName?: string; base64?: string }>
       saveMixerChannels:   (payload: { filePath: string; channels: { index: number; volume: number; pan: number; chorus: number; reverb: number }[] }) => Promise<{ ok: boolean; message?: string; filePath?: string; fileName?: string; base64?: string }>
       saveNoteEditor:      (payload: { filePath: string; base64: string; summary?: string }) => Promise<{ ok: boolean; message?: string; filePath?: string; fileName?: string; base64?: string }>
       saveTempoKey:        (payload: { filePath: string; bpmRatio: number; transposeSemitones: number; summary: string; finalKey?: { semitone: number; isMinor: boolean } }) => Promise<{ ok: boolean; message?: string; filePath?: string; fileName?: string; base64?: string }>
@@ -240,6 +248,10 @@ declare global {
       offSoundfontProgress: () => void
       // Drag-and-drop file import
       getPathForFile:      (file: File) => string
+      // Open with Orfeo
+      takeOpenWithFile:    () => Promise<string | null>
+      onOpenWithFile:      (fn: (filePath: string) => void) => void
+      simulateOpenWith:    (filePath: string) => Promise<void>
       copyMidiToLibrary:   (sourcePath: string, libraryFolder: string) => Promise<string>
       // Foreign format import cache
       getCachedImport:     (sourcePath: string, cachePath: string) => Promise<string | null>
@@ -248,6 +260,13 @@ declare global {
       getUpdateInfo:       () => Promise<UpdateInfo>
       checkForUpdates:     () => Promise<void>
       getNewVersion:       () => Promise<string | null>
+      setLanguage:         (code: string) => Promise<void>
+      // Translations (Settings > Translations)
+      i18nBoot:            () => import('../../electron/translations').BootState
+      i18nRefresh:         (force?: boolean) => Promise<{ stats: import('../i18n/readiness').LangStats[] | null; remote: import('../i18n/readiness').Snapshot | null; fetchedAt: number | null; offline: boolean }>
+      i18nDownload:        (code: string) => Promise<'saved' | 'invalid' | 'failed'>
+      i18nRememberReady:   (codes: string[]) => Promise<void>
+      i18nDev:             (overrides: { percents?: Record<string, number>; offline?: boolean; newer?: boolean; tempDir?: boolean }) => Promise<void>
       installUpdate:       () => Promise<void>
       onUpdateStatus:      (fn: (data: UpdateStatus) => void) => void
       offUpdateStatus:     () => void
@@ -313,4 +332,6 @@ export interface TapSession {
 export type SettingsGroupId =
   // 'playback-editing' is the Playback group (its id kept so saved choices still apply)
   | 'audio' | 'midi-files-library' | 'playback-editing' | 'practice' | 'editing'
-  | 'notation' | 'keyboard' | 'piano-roll' | 'appearance' | 'midi'
+  | 'notation' | 'keyboard' | 'piano-roll' | 'appearance' | 'midi' | 'language'
+  // dev mode only (simAvailable): every test tool
+  | 'devtools'

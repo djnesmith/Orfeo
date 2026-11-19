@@ -1,22 +1,48 @@
 import { useEffect, useState } from 'react'
-import { Palette, ZoomIn, RotateCcw, Sparkles, MessageSquare, Heart, Hand } from 'lucide-react'
+import { Palette, ZoomIn, RotateCcw, Sparkles, MessageSquare, Heart, Hand, Signpost } from 'lucide-react'
 import { useStore } from '../../../store'
 import { t } from '../../../utils/i18n'
-import { AppBgBtn, ZoomStepper, GlanceLine, InlineIcon, Switch, SubLabel, useSurface } from '../controls'
+import { AppBgBtn, ZoomStepper, GlanceLine, InlineIcon, Switch, SubLabel, useSurface, ButtonRow } from '../controls'
 import { HAND_PRESETS, DEFAULT_HAND_LH, DEFAULT_HAND_RH, handColorWarnings, isHex } from '../../../utils/handPalette'
 import { useAppZoom } from '../../../hooks/useAppZoom'
 import { simAvailable } from '../../../utils/midiSimulator'
 import { previewNewVersion } from '../../../hooks/useUpdateCheck'
 import { previewSupportNote } from '../../../hooks/useSupportNote'
 import type { SettingDef } from '../types'
+import type { TourId } from '../../../utils/tours'
 
 function ThemeControl() {
   const appTheme = useStore(s => s.appTheme)
   return (
-    <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
-      <AppBgBtn color="var(--bg-modal-header)" label="Dark" active={appTheme === 'dark'} onClick={() => useStore.getState().setAppTheme('dark')} />
-      <AppBgBtn color="var(--bg-warm)" label="Coming soon" active={false} onClick={() => {}} comingSoon />
-    </div>
+    <ButtonRow>
+      <AppBgBtn color="var(--bg-modal-header)" label={t`Dark`} active={appTheme === 'dark'} onClick={() => useStore.getState().setAppTheme('dark')} />
+      <AppBgBtn color="var(--bg-warm)" label={t`Coming soon`} active={false} onClick={() => {}} comingSoon />
+    </ButtonRow>
+  )
+}
+
+// Show a tour again: the Settings window closes first, so the tour can point at the app
+function ToursControl() {
+  const songOpen = useStore(s => !!s.midi)
+  const start = (id: TourId) => {
+    const s = useStore.getState()
+    s.closeSettingsWindow()
+    setTimeout(() => useStore.getState().startTour(id), 250)
+  }
+  const btn = (label: string, onClick: () => void, enabled = true, tip?: string) => (
+    <button onClick={enabled ? onClick : undefined} disabled={!enabled} title={tip}
+      style={{ flex: 1, width: '100%', whiteSpace: 'nowrap', padding: '5px 14px', borderRadius: 4, border: '1px solid var(--border2)', background: 'var(--bg-modal)',
+        color: 'var(--text-inactive)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-ui)', cursor: enabled ? 'pointer' : 'default', opacity: enabled ? 1 : 0.45 }}
+      onMouseEnter={e => { if (enabled) { e.currentTarget.style.color = 'var(--text-amber)'; e.currentTarget.style.borderColor = 'var(--text-amber)' } }}
+      onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-inactive)'; e.currentTarget.style.borderColor = 'var(--border2)' }}>
+      {label}
+    </button>
+  )
+  return (
+    <ButtonRow gap={6}>
+      {btn(t`First launch`, () => start('firstLaunch'))}
+      {btn(t`First song`, () => start('firstSong'), songOpen, songOpen ? undefined : t`Open a song first`)}
+    </ButtonRow>
   )
 }
 
@@ -93,6 +119,18 @@ function HandPicker({ label, value, onPick }: { label: string; value: string; on
   )
 }
 
+// Settings window: ready-made pairs on the left half, your own on the right
+function HandColorsControl() {
+  const surface = useSurface()
+  if (surface === 'setup') return <HandPresets />
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', columnGap: 16, alignItems: 'start' }}>
+      <div style={{ minWidth: 0 }}><SubLabel>{t`Ready-made pairs`}</SubLabel><HandPresets /></div>
+      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}><HandColorsExtra /></div>
+    </div>
+  )
+}
+
 function HandColorsExtra() {
   const lh = useStore(s => s.handColorLH), rh = useStore(s => s.handColorRH)
   const set = useStore.getState().setHandColors
@@ -120,7 +158,7 @@ function HandColorsExtra() {
 }
 
 // Test builds: see either version's note now instead of on the 5th launch
-function SupportNotePreview() {
+export function SupportNotePreview() {
   if (!simAvailable) return null
   const btn = (label: string, store: boolean) => (
     <button onClick={() => previewSupportNote(store)}
@@ -143,15 +181,16 @@ function SupportNotePreview() {
 
 export const APPEARANCE_DEFS: SettingDef[] = [
   { id: 'theme', icon: Palette, kind: 'choice', Control: ThemeControl },
-  { id: 'handColors', icon: Hand, kind: 'choice', Control: HandPresets, Extra: HandColorsExtra },
+  { id: 'handColors', icon: Hand, kind: 'choice', Control: HandColorsControl },
   { id: 'appZoom', icon: ZoomIn, kind: 'inline', Control: AppZoomControl, Glance: AppZoomGlance, glanceQuickOnly: true, Extra: AppZoomCap,
     Description: () => <>{t`Makes everything in Orfeo bigger or smaller. Ctrl + / Ctrl − / Ctrl 0 work exactly as in a web browser.`} {t`Click`} <InlineIcon><RotateCcw size={10} /></InlineIcon> {t`to reset.`}</> },
   {
     id: 'tooltips', icon: MessageSquare, kind: 'switch',
     Control: () => { const v = useStore(s => s.tooltipsEnabled); return <Switch value={v} onChange={useStore.getState().setTooltipsEnabled} label={t`Tooltips`} /> },
   },
+  { id: 'tours', icon: Signpost, kind: 'choice', Control: ToursControl },
   {
-    id: 'supportNote', icon: Heart, kind: 'switch', Extra: SupportNotePreview,
+    id: 'supportNote', icon: Heart, kind: 'switch',
     Control: () => { const v = useStore(s => s.supportNoteEnabled); return <Switch value={v} onChange={useStore.getState().setSupportNoteEnabled} label={t`Enjoying Orfeo?`} /> },
   },
   {

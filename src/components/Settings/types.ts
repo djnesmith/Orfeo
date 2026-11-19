@@ -17,12 +17,13 @@ export interface SettingDef {
   Extra?: ComponentType         // follow-up options / parameters: window only
   Description?: ComponentType   // richer window description (inline icons); falls back to catalog text
   NameSuffix?: ComponentType    // live value after the name, e.g. "— 100%"
-  NameRight?: ComponentType     // small readout at the right end of the name line — Setup only (choice settings)
+  NameRight?: ComponentType     // small control or readout at the right end of the name line (choice settings)
   useVisible?: () => boolean    // hook; false hides the setting in both places
   badge?: 'beta'
   // 'controlFirst': the control right under the name, then the glance lines, then
   // the description (which may change with the choice), then the follow-up options
-  layout?: 'controlFirst'
+  // 'columns' (Settings window): buttons stacked | glance box | description, side by side
+  layout?: 'controlFirst' | 'columns'
   QuickExtra?: ComponentType    // follow-up control shown in Setup only (under the glance)
   SummaryEnd?: ComponentType    // inline at the end of the Setup summary line (e.g. a link)
   notice?: boolean              // amber-bordered, for an information card

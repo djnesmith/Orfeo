@@ -3,19 +3,26 @@ import { autoUpdater } from 'electron-updater'
 import { join, basename, dirname, extname } from 'path'
 import { execFile } from 'child_process'
 import { readFileSync, writeFileSync, existsSync, readdirSync, createWriteStream, statSync } from 'fs'
-import { mkdir, access, copyFile, readdir, rename, rmdir, writeFile } from 'fs/promises'
+import { readPrefsFile, writePrefsFile } from './prefsFile'
+import { mkdir, access, copyFile, readdir, rename, rmdir, writeFile, readFile, stat } from 'fs/promises'
 import { Midi } from '@tonejs/midi'
 import { Chord, Note } from 'tonal'
 import PDFDocument from 'pdfkit'
-import { assignHands } from '../src/utils/handAssignment'
-import { buildHandExportHint, withHandSuffix, nameHandFromSuffix, parseHandMapMeta, RESTORED_CONFIDENCE } from '../src/utils/handMetadata'
+import { assignHands, assignHandsByTrack, findStavePairs } from '../src/utils/handAssignment'
+import { buildHandExportHint, withHandSuffix, nameHandFromSuffix, parseHandMapMeta, handsToRestore, RESTORED_CONFIDENCE } from '../src/utils/handMetadata'
 import { getGMGroup } from '../src/utils/gmInstruments'
 import { exportsDir, nextFreeName, safeExportBaseName } from './exportName'
 import { scanMidiFolder, listFolderNames } from './libraryScan'
+import { fileFromArgs } from './openWith'
+import { fileHasLyrics } from '../src/utils/lyricsCheck'
 import { KEYBOARD_GROUPS } from '../src/utils/keyboardGroups'
 import { nextOrfeoVersion, stripOrfeoSuffix } from '../src/utils/orfeoVersioning'
 import { downloadEnding, newerRelease } from '../src/utils/newRelease'
 import type { Hand } from '../src/types'
+import { t, applyLanguage, chooseStartup, defaultChoice } from '../src/utils/i18n'
+import { bootState, refresh, download, rememberReady, hasDevOverrides, devDownloadDeps, mayRemember, type DevOverrides } from './translations'
+import bundledTranslations from '../src/i18n/translations.json'
+import type { Snapshot } from '../src/i18n/readiness'
 
 // ── Electron defaults app.getName() to package.json's "name" ("orfeo"),
 // not "productName" ("Orfeo") — that name feeds app.getPath('userData'),
@@ -173,6 +180,8 @@ function createWindow() {
     win.maximize()
     win.show()
   })
+  // A reload starts the page over: hold songs until it asks for them again
+  win.webContents.on('did-start-loading', () => { rendererTakesSongs = false })
   // ── Intercept close: delegate all confirm dialogs to the renderer ─────────
   // Prevents the close, tells the renderer to resolve any pending state
   // (Note Editor unsaved edits, pending imported file), then waits for the
@@ -186,12 +195,10 @@ function createWindow() {
 
 // ── Prefs ──────────────────────────────────────────────────────────────────
 function getPrefsPath() { return join(app.getPath('userData'), 'orfeo-prefs.json') }
-function loadPrefs(): Record<string, any> {
-  try { const p = getPrefsPath(); if (existsSync(p)) return JSON.parse(readFileSync(p, 'utf-8')) } catch {}
-  return {}
-}
+// Crash-safe: a spare file swapped in, a backup per run (electron/prefsFile.ts)
+function loadPrefs(): Record<string, any> { return readPrefsFile(getPrefsPath()) }
 function savePrefs(data: Record<string, any>) {
-  try { writeFileSync(getPrefsPath(), JSON.stringify({ ...loadPrefs(), ...data }, null, 2)) } catch {}
+  try { writePrefsFile(getPrefsPath(), { ...loadPrefs(), ...data }) } catch {}
 }
 ipcMain.handle('prefs:get', async () => loadPrefs())
 
@@ -516,7 +523,7 @@ ipcMain.handle('soundfont:read', (_e, id: string) => {
 // the user cancelled the picker. ───────────────────────────────────────────────
 ipcMain.handle('soundfont:import', async () => {
   const result = await openDialog({
-    title: 'Import SoundFont',
+    title: t`Import SoundFont`,
     defaultPath: dialogDir('soundfont'),
     filters: [{ name: 'SoundFont', extensions: ['sf2', 'sf3'] }],
     properties: ['openFile'],
@@ -566,7 +573,7 @@ ipcMain.handle('soundfont:download', (e, id: string) => {
   const download = new Promise<{ ok: boolean; error?: string }>((resolve) => {
     httpsGetFollow(entry.url, (res) => {
       if (!res.statusCode || res.statusCode >= 400) {
-        resolve({ ok: false, error: `Download failed: HTTP ${res.statusCode ?? (res as any).message ?? 'unknown'}` })
+        resolve({ ok: false, error: t`Download failed: HTTP ${res.statusCode ?? (res as any).message ?? 'unknown'}` })
         return
       }
       const total = Number(res.headers?.['content-length'] ?? 0)
@@ -598,10 +605,10 @@ ipcMain.handle('soundfont:download', (e, id: string) => {
 })
 ipcMain.handle('dialog:openMidi', async () => {
   const result = await openDialog({
-    title: 'Open MIDI File',
+    title: t`Open MIDI File`,
     defaultPath: dialogDir('midi'),
     filters: [
-      { name: 'MIDI & Score Files', extensions: ['mid', 'midi', 'kar', 'musicxml', 'xml', 'mxl', 'gp', 'gp3', 'gp4', 'gp5', 'gpx', 'cap'] },
+      { name: t`MIDI & Score Files`, extensions: ['mid', 'midi', 'kar', 'musicxml', 'xml', 'mxl', 'gp', 'gp3', 'gp4', 'gp5', 'gpx', 'cap'] },
     ],
     properties: ['openFile'],
   })
@@ -617,7 +624,7 @@ ipcMain.handle('dialog:openFolder', async () => {
   const result = await openDialog({
     // createDirectory: macOS only offers New Folder when asked; Windows always does.
     // message: a macOS sheet shows no title
-    title: 'Select MIDI Library Folder', message: 'Select MIDI Library Folder', defaultPath: loadPrefs().libraryFolder, properties: ['openDirectory', 'createDirectory'],
+    title: t`Select MIDI Library Folder`, message: t`Select MIDI Library Folder`, defaultPath: loadPrefs().libraryFolder, properties: ['openDirectory', 'createDirectory'],
   })
   if (result.canceled || !result.filePaths[0]) return null
   const folderPath = result.filePaths[0]
@@ -646,6 +653,22 @@ ipcMain.handle('fs:statFiles', async (_e, paths: string[]) => {
   const out: { path: string; size: number; mtime: number }[] = []
   for (const p of Array.isArray(paths) ? paths : []) {
     try { const st = statSync(p); out.push({ path: p, size: st.size, mtime: Math.round(st.mtimeMs) }) } catch {}
+  }
+  return out
+})
+
+// ── Lyrics check for the Library's lyrics mark: a handful of songs per call, read
+// here so no file travels to the page. Only MIDI-family files; anything over 5 MB
+// or unreadable counts as no lyrics (and isn't retried until it changes). ──────
+ipcMain.handle('lyrics:check', async (_e, paths: string[]) => {
+  const out: { path: string; size: number; mtime: number; lyrics: boolean }[] = []
+  for (const p of Array.isArray(paths) ? paths.slice(0, 50) : []) {
+    if (typeof p !== 'string' || !/\.(mid|midi|kar)$/i.test(p)) continue
+    try {
+      const st = await stat(p)
+      const lyrics = st.size <= 5_000_000 && fileHasLyrics(await readFile(p))
+      out.push({ path: p, size: st.size, mtime: Math.round(st.mtimeMs), lyrics })
+    } catch {}
   }
   return out
 })
@@ -864,8 +887,10 @@ ipcMain.handle('dialog:saveFile', async (_e, opts: { defaultPath: string; filter
 ipcMain.handle('editor:save', async (_e, payload: {
   filePath: string
   outputPath: string
-  includedTracks: { index: number; newProgram: number; name?: string; color?: string; splitHand?: 'L' | 'R'; visible?: boolean; showOnKeyboard?: boolean }[]
+  includedTracks: { index: number; newProgram: number; name?: string; color?: string; splitHand?: 'L' | 'R'; visible?: boolean; showOnKeyboard?: boolean; muted?: boolean }[]
   mergeGroups: number[][]
+  // Mixer values saved in the same version (the save badge's Save all)
+  mixer?: { index: number; volume: number; pan: number; chorus: number; reverb: number }[]
   rhMaxFingers?: number
   lhMaxFingers?: number
   // ── Tempo/Key fold-in — set only when the Playback Editor's "Save Tempo
@@ -877,7 +902,7 @@ ipcMain.handle('editor:save', async (_e, payload: {
   finalKey?: { semitone: number; isMinor: boolean }
 }) => {
   try {
-    if (!payload.filePath) return { ok: false, message: 'No source file loaded' }
+    if (!payload.filePath) return { ok: false, message: t`No source file loaded` }
     const midi = new Midi(readFileSync(payload.filePath))
 
     // ── Restore any hand tags the file already carries — name-suffix (whole-
@@ -902,7 +927,9 @@ ipcMain.handle('editor:save', async (_e, payload: {
       if (!parsed) continue
       const track = midi.tracks[parsed.trackIndex]
       if (!track || parsed.hands.length !== track.notes.length) continue
+      const apply = handsToRestore(parsed) // a stale hint keeps only manual corrections
       track.notes.forEach((note: any, i: number) => {
+        if (!apply[i]) return
         note.hand = parsed.hands[i]
         note.handConfidence = RESTORED_CONFIDENCE
         if (parsed.sources) note.handSource = parsed.sources[i]
@@ -913,8 +940,15 @@ ipcMain.handle('editor:save', async (_e, payload: {
     // 'manual') keeps its tag untouched; assignHands() only ever runs on
     // whatever's left. Returns hands/sources in the same order as `notes`,
     // so callers can zip them back onto whichever note array they came from. ──
+    const isManualNote = (n: any): boolean => n.handSource === 'manual' && !!n.hand
+    // A raw track as the hand engine's pairing reads it: the name written in
+    // the file, its channel and instrument family.
+    const handTrackOf = (rawIdx: number) => {
+      const t = midi.tracks[rawIdx] as any
+      return { name: t.name ?? '', channel: t.channel ?? -1, group: getGMGroup(t.instrument?.number ?? 0, t.channel === 9), notes: t.notes as any[] }
+    }
     const assignHandsRespectingManual = (notes: any[]): { hands: Hand[]; sources: ('computed' | 'manual')[] } => {
-      const isManual = (n: any) => n.handSource === 'manual' && n.hand
+      const isManual = isManualNote
       const computed = notes.filter(n => !isManual(n))
       const { assignments } = assignHands(computed, { rhMaxFingers: payload.rhMaxFingers, lhMaxFingers: payload.lhMaxFingers })
       const handByNote = new Map<any, Hand>()
@@ -934,6 +968,16 @@ ipcMain.handle('editor:save', async (_e, payload: {
 
     const noteTrackIndices: number[] = []
     midi.tracks.forEach((t, i) => { if (t.notes.length > 0) noteTrackIndices.push(i) })
+
+    // Mixer values, written the same way mixer:save does, before any track moves
+    for (const ch of payload.mixer ?? []) {
+      const track = midi.tracks[noteTrackIndices[ch.index]]
+      if (!track) continue
+      for (const [cc, value] of [[7, ch.volume], [10, ch.pan / 2 + 0.5], [91, ch.reverb], [93, ch.chorus]] as const) {
+        ;(track.controlChanges as any)[cc] = []
+        track.addCC({ number: cc, value: Math.max(0, Math.min(1, value)), time: 0 })
+      }
+    }
 
     const handsByRawIdx = new Map<number, Hand[]>()
     const sourcesByRawIdx = new Map<number, ('computed' | 'manual')[]>()
@@ -1030,6 +1074,15 @@ ipcMain.handle('editor:save', async (_e, payload: {
       if (group.length < 2) continue
       const idxs = group.map(i => noteTrackIndices[i]).filter((i): i is number => i !== undefined && includedSet.has(i))
       if (idxs.length < 2) continue
+      // Merging the two staves of one instrument: the staves already say
+      // which hand plays what, so that's what the merged track keeps. Any
+      // other merge becomes one part, and its hands are worked out as one.
+      const groupTracks = idxs.map(i => handTrackOf(i))
+      const pairs = findStavePairs(groupTracks)
+      const staffHand = new Map<any, Hand>()
+      if (idxs.length === 2 && pairs.length === 1) {
+        for (const a of assignHandsByTrack(groupTracks, { rhMaxFingers: payload.rhMaxFingers, lhMaxFingers: payload.lhMaxFingers }, isManualNote)) staffHand.set(a.note, a.hand)
+      }
       const base = midi.tracks[idxs[0]]
       for (let i = 1; i < idxs.length; i++) {
         base.notes.push(...midi.tracks[idxs[i]].notes)
@@ -1037,6 +1090,11 @@ ipcMain.handle('editor:save', async (_e, payload: {
         includedSet.delete(idxs[i])
       }
 
+      if (staffHand.size > 0) {
+        handsByRawIdx.set(idxs[0], base.notes.map((n: any) => isManualNote(n) ? n.hand : staffHand.get(n)!))
+        sourcesByRawIdx.set(idxs[0], base.notes.map((n: any) => isManualNote(n) ? 'manual' : 'computed'))
+        continue
+      }
       const { hands, sources } = assignHandsRespectingManual(base.notes)
       handsByRawIdx.set(idxs[0], hands)
       sourcesByRawIdx.set(idxs[0], sources)
@@ -1056,16 +1114,22 @@ ipcMain.handle('editor:save', async (_e, payload: {
     // every piano/chromatic/organ track gets the same assignHands() pass and
     // export hint, using the classification midiParser.ts uses on reimport
     // so the two sides agree on what counts as "keyboard-group".
-    for (const rawIdx of includedInOrder) {
-      if (handsByRawIdx.has(rawIdx)) continue
+    // Instrument by instrument, like the parser: two tracks that are one
+    // instrument's staves take their hands from the staves (tagging each
+    // staff on its own split the right hand's staff across both hands).
+    const toTag = includedInOrder.filter(rawIdx => {
+      if (handsByRawIdx.has(rawIdx)) return false
       const track = midi.tracks[rawIdx]
       const isDrum = (track as any).channel === 9
-      if (isDrum || track.notes.length === 0) continue
-      const group = getGMGroup(track.instrument?.number ?? 0, isDrum)
-      if (!KEYBOARD_GROUPS.has(group)) continue
-      const { hands, sources } = assignHandsRespectingManual(track.notes)
-      handsByRawIdx.set(rawIdx, hands)
-      sourcesByRawIdx.set(rawIdx, sources)
+      if (isDrum || track.notes.length === 0) return false
+      return KEYBOARD_GROUPS.has(getGMGroup(track.instrument?.number ?? 0, isDrum))
+    })
+    const tagged = new Map<any, Hand>()
+    for (const a of assignHandsByTrack(toTag.map(handTrackOf), { rhMaxFingers: payload.rhMaxFingers, lhMaxFingers: payload.lhMaxFingers }, isManualNote)) tagged.set(a.note, a.hand)
+    for (const rawIdx of toTag) {
+      const notes = midi.tracks[rawIdx].notes
+      handsByRawIdx.set(rawIdx, notes.map((n: any) => isManualNote(n) ? n.hand : tagged.get(n)!))
+      sourcesByRawIdx.set(rawIdx, notes.map((n: any) => isManualNote(n) ? 'manual' : 'computed'))
     }
 
     // ── Inject ORFEO_TRACK_NAME / ORFEO_TRACK_COLOR text meta-events for each
@@ -1080,7 +1144,8 @@ ipcMain.handle('editor:save', async (_e, payload: {
     ;(midi.header as any).meta = existingMeta.filter((m: any) =>
       !(typeof m.text === 'string' && (
         m.text.startsWith('ORFEO_TRACK_NAME:') || m.text.startsWith('ORFEO_TRACK_COLOR:') ||
-        m.text.startsWith('ORFEO_TRACK_VISIBLE:') || m.text.startsWith('ORFEO_TRACK_KEYBOARD:')
+        m.text.startsWith('ORFEO_TRACK_VISIBLE:') || m.text.startsWith('ORFEO_TRACK_KEYBOARD:') ||
+        m.text.startsWith('ORFEO_TRACK_MUTED:')
       ))
     )
     includedInOrder.forEach((rawIdx, outIdx) => {
@@ -1089,6 +1154,8 @@ ipcMain.handle('editor:save', async (_e, payload: {
       if (entry?.color) (midi.header as any).meta.push({ type: 'text', text: `ORFEO_TRACK_COLOR:${outIdx}:${entry.color}`, ticks: 0 })
       if (entry?.visible !== undefined) (midi.header as any).meta.push({ type: 'text', text: `ORFEO_TRACK_VISIBLE:${outIdx}:${entry.visible ? 1 : 0}`, ticks: 0 })
       if (entry?.showOnKeyboard !== undefined) (midi.header as any).meta.push({ type: 'text', text: `ORFEO_TRACK_KEYBOARD:${outIdx}:${entry.showOnKeyboard ? 1 : 0}`, ticks: 0 })
+      // Mute is kept, not a reason to leave a track out (removing = unticking Include)
+      if (entry?.muted !== undefined) (midi.header as any).meta.push({ type: 'text', text: `ORFEO_TRACK_MUTED:${outIdx}:${entry.muted ? 1 : 0}`, ticks: 0 })
     })
 
     // ── Inject hand-assignment export hint for every tagged track ─────────────
@@ -1164,9 +1231,9 @@ ipcMain.handle('editor:save', async (_e, payload: {
 
     // ── Return file data so the renderer can reload inline ────────────────────
     const fileName = outputPath.split(/[\\/]/).pop() ?? outputPath
-    return { ok: true, message: `Saved: ${fileName}`, filePath: outputPath, fileName, base64: outBuf.toString('base64') }
+    return { ok: true, message: t`Saved: ${fileName}`, filePath: outputPath, fileName, base64: outBuf.toString('base64') }
   } catch (e: any) {
-    return { ok: false, message: e?.message ?? 'Save failed' }
+    return { ok: false, message: e?.message ?? t`Save failed` }
   }
 })
 
@@ -1179,7 +1246,7 @@ ipcMain.handle('mixer:save', async (_e, payload: {
   channels: { index: number; volume: number; pan: number; chorus: number; reverb: number }[]
 }) => {
   try {
-    if (!payload.filePath) return { ok: false, message: 'No source file loaded' }
+    if (!payload.filePath) return { ok: false, message: t`No source file loaded` }
     const midi = new Midi(readFileSync(payload.filePath))
 
     const noteTrackIndices: number[] = []
@@ -1216,9 +1283,9 @@ ipcMain.handle('mixer:save', async (_e, payload: {
     writeFileSync(outputPath, outBuf)
 
     const fileName = outputPath.split(/[\\/]/).pop() ?? outputPath
-    return { ok: true, message: `Saved: ${fileName}`, filePath: outputPath, fileName, base64: outBuf.toString('base64') }
+    return { ok: true, message: t`Saved: ${fileName}`, filePath: outputPath, fileName, base64: outBuf.toString('base64') }
   } catch (e: any) {
-    return { ok: false, message: e?.message ?? 'Save failed' }
+    return { ok: false, message: e?.message ?? t`Save failed` }
   }
 })
 
@@ -1235,7 +1302,7 @@ ipcMain.handle('tempoKey:save', async (_e, payload: {
   finalKey?: { semitone: number; isMinor: boolean }
 }) => {
   try {
-    if (!payload.filePath) return { ok: false, message: 'No source file loaded' }
+    if (!payload.filePath) return { ok: false, message: t`No source file loaded` }
     const midi = new Midi(readFileSync(payload.filePath))
 
     if (payload.bpmRatio !== 1) {
@@ -1287,9 +1354,9 @@ ipcMain.handle('tempoKey:save', async (_e, payload: {
     writeFileSync(outputPath, outBuf)
 
     const fileName = outputPath.split(/[\\/]/).pop() ?? outputPath
-    return { ok: true, message: `Saved: ${fileName}`, filePath: outputPath, fileName, base64: outBuf.toString('base64') }
+    return { ok: true, message: t`Saved: ${fileName}`, filePath: outputPath, fileName, base64: outBuf.toString('base64') }
   } catch (e: any) {
-    return { ok: false, message: e?.message ?? 'Save failed' }
+    return { ok: false, message: e?.message ?? t`Save failed` }
   }
 })
 
@@ -1793,7 +1860,7 @@ ipcMain.handle('transcript:generate', async (_e, midiFilePath: string, noteNamin
 // e.g. Downloads, silently writing the file to the wrong place). ────────────
 ipcMain.handle('noteEditor:save', async (_e, payload: { filePath: string; base64: string; summary?: string }) => {
   try {
-    if (!payload.filePath) return { ok: false, message: 'No source file loaded' }
+    if (!payload.filePath) return { ok: false, message: t`No source file loaded` }
     const orfeoDir   = await getOrfeoOutputDir(payload.filePath)
     const rawBase    = basename(payload.filePath).replace(/\.midi?$/i, '')
     const outputPath = nextAvailableOrfeoPath(orfeoDir, rawBase)
@@ -1811,7 +1878,7 @@ ipcMain.handle('noteEditor:save', async (_e, payload: { filePath: string; base64
     const fileName = outputPath.split(/[\\/]/).pop() ?? ''
     return { ok: true, filePath: outputPath, fileName, base64: buf.toString('base64') }
   } catch (e: any) {
-    return { ok: false, message: e?.message ?? 'Save failed' }
+    return { ok: false, message: e?.message ?? t`Save failed` }
   }
 })
 
@@ -1888,10 +1955,10 @@ function sendUpdateStatus(payload: Record<string, unknown>) {
 // a single short sentence so the tooltip stays a tooltip, and treat a
 // missing-release as a soft "couldn't check" rather than a scary error. ────
 function summarizeUpdateError(err: unknown): { state: string; message: string } {
-  const raw = (err instanceof Error ? err.message : String(err ?? '')) || 'Update check failed'
+  const raw = (err instanceof Error ? err.message : String(err ?? '')) || t`Update check failed`
   const firstLine = raw.split('\n')[0].trim()
   if (/unable to find latest version|HttpError:\s*4(0[34]|06)|ENOTFOUND|net::ERR|getaddrinfo/i.test(raw)) {
-    return { state: 'error', message: "Couldn't reach the update server — try again later or check the Releases page." }
+    return { state: 'error', message: t`Couldn't reach the update server — try again later or check the Releases page.` }
   }
   return { state: 'error', message: firstLine.length > 160 ? firstLine.slice(0, 157) + '…' : firstLine }
 }
@@ -1924,6 +1991,29 @@ const RELEASE_CHECK_TIMEOUT_MS = 10_000
 const releaseTest = app.isPackaged ? undefined : process.env.ORFEO_RELEASE_TEST
 
 // Asked by the renderer once it's listening, so a quick answer can't go missing
+// Language for the Open/Save windows and messages from this side of the app. The
+// PDF transcript stays English: its built-in fonts have no other scripts.
+const applyChoice = (choice: string) => {
+  let boot = null
+  try { boot = bootState(translationsDeps(), bundledTranslations as Snapshot, app.getLocale()) } catch { /* bundled words only */ }
+  const { code, catalog } = chooseStartup(choice, app.getLocale(), boot)
+  applyLanguage(code, catalog)
+}
+ipcMain.handle('language:set', (_e, code: string) => { savePrefs({ language: code }); applyChoice(code) })
+// Translations: Weblate numbers, language files in userData, start-up snapshot (sync, disk only)
+const translationsDeps = () => ({ fetch, dir: join(app.getPath('userData'), 'translations'), now: Date.now })
+ipcMain.on('i18n:boot', (event) => {
+  try { event.returnValue = bootState(translationsDeps(), bundledTranslations as Snapshot, app.getLocale()) }
+  catch (e) { console.error('i18n:boot failed', e); event.returnValue = { seenReady: [], downloaded: {}, stats: null, fetchedAt: null, remote: null, locale: app.getLocale() } }
+})
+// Dev Tools > Translations: pretend numbers, memory only; downloads go to a temporary folder while any are on
+let devTranslations: DevOverrides | null = null
+const devDeps = () => devDownloadDeps(translationsDeps(), devTranslations)
+ipcMain.handle('i18n:dev', (_e, o: DevOverrides) => { devTranslations = hasDevOverrides(o) ? o : null })
+ipcMain.handle('i18n:refresh', (_e, force?: boolean) => refresh(translationsDeps(), !!force, devTranslations))
+ipcMain.handle('i18n:download', (_e, code: string) => download(devDeps(), code))
+ipcMain.handle('i18n:remember-ready', (_e, codes: string[]) => { if (mayRemember(devTranslations)) rememberReady(translationsDeps(), codes) })
+
 ipcMain.handle('update:new-version', async (): Promise<string | null> => {
   if (updateMode !== 'manual' || !(app.isPackaged || releaseTest)) return null
   try {
@@ -2002,8 +2092,63 @@ if (process.env.PORTABLE_EXECUTABLE_DIR) {
   app.setPath('userData', join(process.env.PORTABLE_EXECUTABLE_DIR, 'Orfeo-Data'))
 }
 
+// ── Open with Orfeo: a song double-clicked in the system ─────────────────────
+// Windows and Linux pass it on the command line; macOS sends open-file, which
+// can arrive before the window exists. One copy of Orfeo runs at a time, so a
+// second double click hands its song to the open window instead of starting
+// another app. The page asks for a song waiting from launch once it is ready
+// (openWith:take); after that, songs go straight to it.
+let pendingSong: string | null = null
+let rendererTakesSongs = false
+function openSong(filePath: string | null) {
+  if (!filePath || !existsSync(filePath)) return
+  if (mainWin && !mainWin.isDestroyed() && rendererTakesSongs) mainWin.webContents.send('app:open-file', filePath)
+  else pendingSong = filePath
+}
+function bringWindowForward() {
+  if (!mainWin || mainWin.isDestroyed()) return
+  if (mainWin.isMinimized()) mainWin.restore()
+  mainWin.focus()
+}
+// The lock lives in the settings folder: a portable copy or a test copy with its own
+// folder runs beside the installed app. npm run dev shares the installed app's folder,
+// so it skips the lock rather than closing itself.
+const isOnlyCopy = !app.isPackaged || app.requestSingleInstanceLock()
+if (!isOnlyCopy) {
+  app.quit()
+} else {
+  app.on('second-instance', (_e, argv, workingDirectory) => {
+    bringWindowForward()
+    openSong(fileFromArgs(argv, workingDirectory))
+  })
+  openSong(fileFromArgs(process.argv, process.cwd()))
+}
+app.on('open-file', (e, filePath) => {
+  e.preventDefault()
+  bringWindowForward()
+  openSong(filePath)
+})
+ipcMain.handle('openWith:take', () => {
+  rendererTakesSongs = true
+  const song = pendingSong
+  pendingSong = null
+  return song
+})
+// Dev mode: open a file exactly as if the system had sent it
+ipcMain.handle('openWith:simulate', (_e, filePath: string) => {
+  bringWindowForward()
+  openSong(filePath)
+})
+
 // ── Launch: copy demo files on first run, then open main window ───────────────
 app.whenReady().then(async () => {
+  if (!isOnlyCopy) return // the open copy got the song; this one is quitting
+  // A first start (no settings file yet) marks both tours as still to show. A copy
+  // updated from an earlier version has settings but no mark, and the page counts
+  // that as already seen (src/utils/tours.ts), so existing users never get them.
+  if (!existsSync(getPrefsPath())) savePrefs({ tours: { firstLaunch: false, firstSong: false } })
+  // after ready: the computer's language isn't known before it
+  applyChoice(loadPrefs().language ?? defaultChoice())
   try { await ensureDemoFolder() } catch (e) { console.error('[Orfeo] ensureDemoFolder failed:', e) }
   // ── No default menu — this app has its own custom title bar and no menu
   // bar is ever shown, but Electron's built-in default menu (auto-created

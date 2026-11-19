@@ -27,6 +27,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Prefs
   getPrefs:           () => ipcRenderer.invoke('prefs:get'),
   setPrefs:           (data: any) => ipcRenderer.invoke('prefs:set', data),
+  setLanguage:        (code: string) => ipcRenderer.invoke('language:set', code),
+  i18nBoot:           () => ipcRenderer.sendSync('i18n:boot'),
+  i18nRefresh:        (force?: boolean) => ipcRenderer.invoke('i18n:refresh', force),
+  i18nDownload:       (code: string) => ipcRenderer.invoke('i18n:download', code),
+  i18nRememberReady:  (codes: string[]) => ipcRenderer.invoke('i18n:remember-ready', codes),
+  i18nDev:            (overrides: unknown) => ipcRenderer.invoke('i18n:dev', overrides),
   // Library
   openFolder:         () => ipcRenderer.invoke('dialog:openFolder'),
   scanMidiFolder:     (path: string) => ipcRenderer.invoke('fs:scanMidiFolder', path),
@@ -35,6 +41,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadMidiFromPath:   (path: string) => ipcRenderer.invoke('fs:loadMidiFromPath', path),
   saveExport:         (songPath: string, libraryFolder: string | null, fileName: string, bytes: Uint8Array) => ipcRenderer.invoke('export:save', songPath, libraryFolder, fileName, bytes),
   statFiles:          (paths: string[]) => ipcRenderer.invoke('fs:statFiles', paths),
+  checkLyrics:        (paths: string[]) => ipcRenderer.invoke('lyrics:check', paths),
   // MIDI Editor
   saveFileDialog:     (opts: any) => ipcRenderer.invoke('dialog:saveFile', opts),
   saveMidiEditor:     (payload: any) => ipcRenderer.invoke('editor:save', payload),
@@ -62,6 +69,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   offSaveBeforeClose:  ()             => ipcRenderer.removeAllListeners('app:save-before-close'),
   // Drag-and-drop file import
   getPathForFile:     (file: File) => webUtils.getPathForFile(file),
+  // Open with Orfeo: a song double-clicked in the system
+  takeOpenWithFile:   () => ipcRenderer.invoke('openWith:take'),
+  onOpenWithFile:     (fn: (filePath: string) => void) => { ipcRenderer.removeAllListeners('app:open-file'); ipcRenderer.on('app:open-file', (_e, filePath) => fn(filePath)) },
+  simulateOpenWith:   (filePath: string) => ipcRenderer.invoke('openWith:simulate', filePath),
   copyMidiToLibrary:  (sourcePath: string, libraryFolder: string) => ipcRenderer.invoke('fs:copyMidiToLibrary', sourcePath, libraryFolder),
   // Foreign format import cache
   getCachedImport:    (sourcePath: string, cachePath: string) => ipcRenderer.invoke('fs:getCachedImport', sourcePath, cachePath),

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type {
   ParsedMidi, ParsedTrack, PlaybackState, TrackState,
-  KeyboardSize, KeyboardMode, NoteNaming, Accidentals, ChordEvent, TranscriptEntry, LibraryFile, HitEffectPattern, SoundfontId,
+  KeyboardSize, KeyboardMode, NoteNaming, SargamScript, Accidentals, ChordEvent, TranscriptEntry, LibraryFile, HitEffectPattern, SoundfontId,
   ChordNamingStyle, ChordTrackingMode, ChordFollowSubMode, ChordReadingMode, TapSession, SettingsGroupId,
 } from '../types'
 import type { DetectedKey } from '../utils/keyDetection'
@@ -9,6 +9,9 @@ import type { ForeignFormat } from '../utils/foreignFormatImport'
 import type { ProgressionVoicing } from '../utils/voiceLeading'
 import { detectKeyFromTracks, parseKeySignature } from '../utils/keyDetection'
 import { isKeyboardInstrument } from '../utils/gmInstruments'
+import { currentLanguage, hasWords } from '../utils/i18n'
+import { withLanguageInUse } from '../i18n/menuItems'
+import { checkTranslations } from '../i18n/updates'
 import { parseMidiBuffer } from '../utils/midiParser'
 import { songKey as computeSongKey } from '../utils/songIdentity'
 import { applyTempoCorrection, sanitizeCorrections, correctionToSong, correctionToFile, type SongTempoCorrection } from '../utils/tempoCorrection'
@@ -18,7 +21,13 @@ import { velocityDropRatio, suggestCompressorPreset } from '../utils/velocityAna
 import { applyHandColors, isHex, handHex, followedHandColor, DEFAULT_HAND_LH, DEFAULT_HAND_RH } from '../utils/handPalette'
 import { HAND_ASSIGN_GROUPS, focusRole } from '../utils/keyboardGroups'
 import type { TrackBaseline } from '../utils/unsavedChanges'
+import type { LyricsEntry } from '../utils/lyricsScan'
+import { addTag, renameTag, deleteTag, setSongsTag, remapSongTags, restoreTagState, type TagState } from '../utils/libraryTags'
 import { restoreFrame, type Frame } from '../utils/settingsFrame'
+import { addToQueue, removeFromQueue, moveInQueue, followOpenSong, remapQueue, restoreQueue, EMPTY_QUEUE, QUEUE_END_ACTIONS, type QueueState, type QueueEndAction } from '../utils/practiceQueue'
+import { clampLibraryWidth, LIBRARY_MIN_WIDTH } from '../utils/libraryWidth'
+import { PIANO_RANGES, viewOfRange, isPortableSize, clampOctave, type KeyView } from '../utils/keyLayout'
+import { toursFromPrefs, type TourId, type ToursSeen } from '../utils/tours'
 
 // ── Focus mode: every track's mute + eye from just before Focus went on, so
 // the second click puts back exactly what you had. Null while Focus is off.
@@ -58,6 +67,18 @@ interface OrfeoStore {
   muteGroup: (group: string, muted: boolean) => void
 
   keyboardSize: KeyboardSize
+  // ── Portable keyboards (25/37/49 keys): offered only while this is on;
+  // their range moves by keyboardOctave (the octave ‹ › buttons). keyView and
+  // keyViewLo/Hi are what the keyboard and piano roll draw right now: during a
+  // size or octave change they glide there (utils/keyView.ts). ──
+  portableKeyboards: boolean
+  setPortableKeyboards: (on: boolean) => void
+  keyboardOctave: number
+  setKeyboardOctave: (octave: number) => void
+  lastStandardSize: KeyboardSize
+  keyView: KeyView
+  keyViewLo: number
+  keyViewHi: number
   keyboardMode: KeyboardMode
   activeKeys: Set<number>
   // ── Keys held down on a hardware MIDI keyboard right now (useMidiInput) —
@@ -76,6 +97,9 @@ interface OrfeoStore {
   appTheme: AppTheme
   showBarNumbers: boolean
   setNoteNaming: (naming: NoteNaming) => void
+  // Sargam: where Sa sits ('auto' = the song's key as heard, or a pitch class 0–11 set by hand) and the script
+  sargam: { sa: 'auto' | number; script: SargamScript }
+  setSargam: (p: Partial<{ sa: 'auto' | number; script: SargamScript }>) => void
   setAccidentals: (accidentals: Accidentals) => void
   setZoomLevel: (zoom: number) => void
   setAppTheme: (theme: AppTheme) => void
@@ -127,6 +151,14 @@ interface OrfeoStore {
   setTrackPanelOpen: (open: boolean) => void
   setSettingsOpen: (open: boolean) => void
   setSettingsPanelOpen: (open: boolean) => void
+  // the left panel's tab; in the store so a tour can show Setup or the Library
+  drawerTab: 'library' | 'settings'
+  setDrawerTab: (tab: 'library' | 'settings') => void
+  // the two tours for a new install (utils/tours.ts); which one is running, not saved
+  toursSeen: ToursSeen
+  tourActive: TourId | null
+  startTour: (id: TourId) => void
+  endTour: () => void
 
   chordExplorerOpen: boolean
   chordExplorerMinimized: boolean
@@ -259,6 +291,11 @@ interface OrfeoStore {
   setTempoDisplay: (v: 'bpm' | 'percent') => void
   noteEditorSoloTrackIndex: number | null
   preSoloTrackVisibility: boolean[] | null
+  // Checking the hands passage by passage (utils/handCheck.ts): which track,
+  // which passage, and whether its panel is showing. Session only.
+  handCheck: { track: number; index: number; panel: boolean } | null
+  // bumped when "The hands are right" changes the passages
+  handCheckRev: number
   soloTrackForEdit: (index: number, opts?: { keepPlayhead?: boolean }) => void
   unsoloTrackForEdit: () => void
   noteEditorWalkthroughSeen: boolean
@@ -342,6 +379,43 @@ interface OrfeoStore {
 
   hideDemoFolder: boolean
   setHideDemoFolder: (v: boolean) => void
+  openWithAddsToLibrary: boolean
+  setOpenWithAddsToLibrary: (v: boolean) => void
+  // Library lyrics mark (Settings › Show files with lyrics) and its remembered check results
+  showLyricsMark: boolean
+  showLanguageSwitcher: boolean
+  setShowLanguageSwitcher: (v: boolean) => void
+  menuLanguages: string[]
+  setMenuLanguages: (codes: string[]) => void
+  translationUpdates: 'download' | 'wait'
+  setTranslationUpdates: (v: 'download' | 'wait') => void
+  setShowLyricsMark: (v: boolean) => void
+  lyricsIndex: Record<string, LyricsEntry>
+  setLyricsEntries: (entries: ({ path: string } & LyricsEntry)[]) => void
+  clearLyricsIndex: () => void
+  // Library tags (Settings › Tags; see utils/libraryTags.ts)
+  libraryTags: string[]
+  songTags: Record<string, string[]>
+  pinnedTags: string[]
+  addLibraryTag: (name: string) => boolean
+  renameLibraryTag: (from: string, to: string) => boolean
+  deleteLibraryTag: (tag: string) => void
+  setSongsTag: (paths: string[], tag: string, on: boolean) => void
+  setPinnedTags: (pinned: string[]) => void
+  // Practice queue (Settings › Practice queue; see utils/practiceQueue.ts)
+  queueEnabled: boolean
+  setQueueEnabled: (v: boolean) => void
+  queue: QueueState
+  setQueue: (q: QueueState) => void
+  queueAdd: (paths: string[]) => void
+  queueRemove: (path: string) => void
+  queueMove: (from: number, to: number) => void
+  queueClear: () => void
+  queueEndAction: QueueEndAction
+  setQueueEndAction: (a: QueueEndAction) => void
+  songEndedAt: number         // set when a song plays to its end (not on Stop), for the queue
+  libraryWidth: number        // the Library tab's chosen width (dragging the panel's edge; utils/libraryWidth.ts)
+  setLibraryWidth: (w: number) => void
 
   // ── Blinks the Library refresh icon after any resave (foreign-import save,
   // MidiEditor save, Note Editor save) — cleared once the user clicks refresh.
@@ -510,8 +584,12 @@ interface OrfeoStore {
   // playback when this is on; always shows the plain static color when off. ──
   trackVuColorEnabled: boolean
   unsavedWarningEnabled: boolean
+  // Shown / keyboard lights / mute saved with the song (badge, Save all). Off:
+  // they last for the session only (the Playback Editor still saves its own).
+  saveTrackChangesEnabled: boolean
   setTrackVuColorEnabled: (v: boolean) => void
   setUnsavedWarningEnabled: (v: boolean) => void
+  setSaveTrackChangesEnabled: (v: boolean) => void
 
   handLabelMode: 'practice' | 'performance'
   setHandLabelMode: (mode: 'practice' | 'performance') => void
@@ -567,6 +645,22 @@ function makeTrackState(track: ParsedTrack): TrackState {
   }
 }
 
+/** Mute and eye as the player set them, for saving: Focus mode's own mutes and
+ *  hidden tracks are only for the moment, so its snapshot of before counts. */
+export function playerTrackFlags(t: { index: number; muted: boolean; visible: boolean }): { muted: boolean; visible: boolean } {
+  const s = useStore.getState()
+  const before = s.focusActive ? _focusSnapshot?.get(t.index) : undefined
+  if (before) return before
+  // The Note Editor's hand view hides the other tracks only for the moment;
+  // the eye the player chose is kept aside until it ends
+  if (s.noteEditorSoloTrackIndex !== null && s.preSoloTrackVisibility) {
+    const pos = s.tracks.findIndex(x => x.index === t.index)
+    const v = pos >= 0 ? s.preSoloTrackVisibility[pos] : undefined
+    if (v !== undefined) return { muted: t.muted, visible: v }
+  }
+  return { muted: t.muted, visible: t.visible }
+}
+
 export const useStore = create<OrfeoStore>((set, get) => ({
   midi: null,
   barStarts: [],
@@ -590,12 +684,14 @@ export const useStore = create<OrfeoStore>((set, get) => ({
     const orfeoColors = (midi as any)._orfeoTrackColors as Record<number, string> | undefined
     const orfeoVisible = (midi as any)._orfeoTrackVisible as Record<number, boolean> | undefined
     const orfeoKeyboard = (midi as any)._orfeoTrackKeyboard as Record<number, boolean> | undefined
+    const orfeoMuted = (midi as any)._orfeoTrackMuted as Record<number, boolean> | undefined
     const newTracks = midi.tracks.map((t, i) => {
       const ts = makeTrackState(t)
       if (orfeoNames?.[i]) ts.trackName = orfeoNames[i]
       if (orfeoColors?.[i]) { ts.color = orfeoColors[i]; ts.colorSource = 'custom' }
       if (orfeoVisible?.[i] !== undefined) ts.visible = orfeoVisible[i]
       if (orfeoKeyboard?.[i] !== undefined) ts.showOnKeyboard = orfeoKeyboard[i]
+      if (orfeoMuted?.[i] !== undefined) ts.muted = orfeoMuted[i]
       // A piano still on Orfeo's default blue/pink (older saved versions store
       // it) takes the user's hand colours
       if (HAND_ASSIGN_GROUPS.has(ts.group ?? '')) ts.color = followedHandColor(ts.color, handHex(), handHex()) ?? ts.color
@@ -676,12 +772,29 @@ export const useStore = create<OrfeoStore>((set, get) => ({
     set((s) => ({ tracks: s.tracks.map((t) => t.group === group ? { ...t, muted } : t) })),
 
   keyboardSize: 73,
+  portableKeyboards: false,
+  keyboardOctave: 0,
+  lastStandardSize: 73,
+  keyView: viewOfRange(PIANO_RANGES[73].min, PIANO_RANGES[73].max),
+  keyViewLo: PIANO_RANGES[73].min,
+  keyViewHi: PIANO_RANGES[73].max,
   keyboardMode: 'docked',
   activeKeys: new Set(),
   midiHeldKeys: new Set(),
   activeKeyColors: new Map(),
 
-  setKeyboardSize: (keyboardSize) => set({ keyboardSize }),
+  // a new size starts at its own factory octave; a portable size only while
+  // Portable keyboards is on
+  setKeyboardSize: (keyboardSize) => set((s) => {
+    if (isPortableSize(keyboardSize) && !s.portableKeyboards) return {}
+    if (keyboardSize === s.keyboardSize) return {}
+    return { keyboardSize, keyboardOctave: 0, ...(isPortableSize(keyboardSize) ? {} : { lastStandardSize: keyboardSize }) }
+  }),
+  setPortableKeyboards: (portableKeyboards) => set((s) => (
+    !portableKeyboards && isPortableSize(s.keyboardSize)
+      ? { portableKeyboards, keyboardSize: s.lastStandardSize, keyboardOctave: 0 }
+      : { portableKeyboards })),
+  setKeyboardOctave: (octave) => set((s) => ({ keyboardOctave: clampOctave(s.keyboardSize, octave) })),
   setKeyboardMode: (keyboardMode) => set({ keyboardMode }),
   setActiveKeys: (activeKeys) => set({ activeKeys }),
   setActiveKeyColors: (activeKeyColors) => set({ activeKeyColors }),
@@ -692,6 +805,8 @@ export const useStore = create<OrfeoStore>((set, get) => ({
   appTheme: 'dark',
   showBarNumbers: true,
   setNoteNaming: (noteNaming) => set({ noteNaming }),
+  sargam: { sa: 'auto', script: 'latin' },
+  setSargam: (p) => set(s => ({ sargam: { ...s.sargam, ...p } })),
   setAccidentals: (accidentals) => set({ accidentals }),
   setZoomLevel: (zoomLevel) => set({ zoomLevel }),
   setAppTheme: (appTheme) => set({ appTheme }),
@@ -737,6 +852,14 @@ export const useStore = create<OrfeoStore>((set, get) => ({
   setTrackPanelOpen: (trackPanelOpen) => set({ trackPanelOpen }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
   setSettingsPanelOpen: (settingsPanelOpen) => set({ settingsPanelOpen }),
+  drawerTab: 'library',
+  setDrawerTab: (drawerTab) => set({ drawerTab }),
+  // seen until the saved mark says otherwise, so nothing shows before the settings are back
+  toursSeen: { firstLaunch: true, firstSong: true },
+  tourActive: null,
+  startTour: (tourActive) => set({ tourActive }),
+  // ending a tour, by Done, Skip or Esc, counts it as seen
+  endTour: () => set((s) => (s.tourActive ? { toursSeen: { ...s.toursSeen, [s.tourActive]: true }, tourActive: null } : {})),
 
   chordExplorerOpen: false,
   chordExplorerMinimized: false,
@@ -911,15 +1034,13 @@ export const useStore = create<OrfeoStore>((set, get) => ({
     set({ tempoDisplay })
     window.electronAPI?.setPrefs?.({ tempoDisplay })?.catch?.(() => {})
   },
-  // saved as it's set: the window only sets it when a move or resize ends
-  setSettingsWindowFrame: (settingsWindowFrame) => {
-    set({ settingsWindowFrame })
-    window.electronAPI?.setPrefs?.({ settingsWindowFrame })?.catch?.(() => {})
-  },
+  setSettingsWindowFrame: (settingsWindowFrame) => set({ settingsWindowFrame }),
 
   // ── Note Editor: track solo + first-run walkthrough ───────────────────────
   noteEditorSoloTrackIndex: null,
   preSoloTrackVisibility: null,
+  handCheck: null,
+  handCheckRev: 0,
   soloTrackForEdit: (index, opts) => {
     const s = get()
     if (s.noteEditorSoloTrackIndex === index) {
@@ -977,6 +1098,58 @@ export const useStore = create<OrfeoStore>((set, get) => ({
   // ── Demo folder visibility — persisted, default visible ───────────────────
   hideDemoFolder: false,
   setHideDemoFolder: (hideDemoFolder) => set({ hideDemoFolder }),
+  openWithAddsToLibrary: false,
+  setOpenWithAddsToLibrary: (openWithAddsToLibrary) => set({ openWithAddsToLibrary }),
+  showLyricsMark: false,
+  setShowLyricsMark: (showLyricsMark) => set({ showLyricsMark }),
+  showLanguageSwitcher: false,
+  setShowLanguageSwitcher: (showLanguageSwitcher) => set({ showLanguageSwitcher }),
+  menuLanguages: [],
+  setMenuLanguages: (menuLanguages) => set({ menuLanguages }),
+  translationUpdates: 'download',
+  setTranslationUpdates: (translationUpdates) => set({ translationUpdates }),
+  lyricsIndex: {},
+  setLyricsEntries: (entries) => set((s) => {
+    if (!entries.length) return {}
+    const next = { ...s.lyricsIndex }
+    for (const { path, ...e } of entries) next[path] = e
+    return { lyricsIndex: next }
+  }),
+  clearLyricsIndex: () => set({ lyricsIndex: {} }),
+  libraryTags: [],
+  songTags: {},
+  pinnedTags: [],
+  addLibraryTag: (name) => {
+    const s = useStore.getState()
+    const next = addTag({ tags: s.libraryTags, songTags: s.songTags, pinned: s.pinnedTags }, name)
+    if (next) set({ libraryTags: next.tags, pinnedTags: next.pinned })
+    return !!next
+  },
+  renameLibraryTag: (from, to) => {
+    const s = useStore.getState()
+    const next = renameTag({ tags: s.libraryTags, songTags: s.songTags, pinned: s.pinnedTags }, from, to)
+    if (next) set({ libraryTags: next.tags, songTags: next.songTags, pinnedTags: next.pinned })
+    return !!next
+  },
+  deleteLibraryTag: (tag) => set((s) => {
+    const next = deleteTag({ tags: s.libraryTags, songTags: s.songTags, pinned: s.pinnedTags }, tag)
+    return { libraryTags: next.tags, songTags: next.songTags, pinnedTags: next.pinned }
+  }),
+  setSongsTag: (paths, tag, on) => set((s) => ({ songTags: setSongsTag(s.songTags, paths, tag, on) })),
+  setPinnedTags: (pinnedTags) => set({ pinnedTags }),
+  queueEnabled: false,
+  setQueueEnabled: (queueEnabled) => set({ queueEnabled }),
+  queue: EMPTY_QUEUE,
+  setQueue: (queue) => set({ queue }),
+  queueAdd: (paths) => set((s) => ({ queue: addToQueue(s.queue, paths) })),
+  queueRemove: (path) => set((s) => ({ queue: removeFromQueue(s.queue, path) })),
+  queueMove: (from, to) => set((s) => ({ queue: moveInQueue(s.queue, from, to) })),
+  queueClear: () => set({ queue: EMPTY_QUEUE }),
+  queueEndAction: 'ask',
+  setQueueEndAction: (queueEndAction) => set({ queueEndAction }),
+  songEndedAt: 0,
+  libraryWidth: LIBRARY_MIN_WIDTH,
+  setLibraryWidth: (w) => set({ libraryWidth: clampLibraryWidth(w) }),
 
   libraryNeedsRefresh: false,
   setLibraryNeedsRefresh: (libraryNeedsRefresh) => set({ libraryNeedsRefresh }),
@@ -1128,8 +1301,10 @@ export const useStore = create<OrfeoStore>((set, get) => ({
 
   trackVuColorEnabled: true,
   unsavedWarningEnabled: true,
+  saveTrackChangesEnabled: true,
   setTrackVuColorEnabled: (trackVuColorEnabled) => set({ trackVuColorEnabled }),
   setUnsavedWarningEnabled: (unsavedWarningEnabled) => set({ unsavedWarningEnabled }),
+  setSaveTrackChangesEnabled: (saveTrackChangesEnabled) => set({ saveTrackChangesEnabled }),
 
   // ── Hand label mode — practice (static, tag-based) or performance (per-note, live) ─
   // Practice mode's UI toggle is disabled (see SettingsPanel.tsx) — proves
@@ -1209,7 +1384,7 @@ export const useStore = create<OrfeoStore>((set, get) => ({
       Array.from(s.libraryFavourites, p => map.get(p) ?? p),
     )
     const nextHidden = s.hiddenLibraryFiles.map(p => map.get(p) ?? p)
-    return { libraryFavourites: nextFavourites, hiddenLibraryFiles: nextHidden }
+    return { libraryFavourites: nextFavourites, hiddenLibraryFiles: nextHidden, songTags: remapSongTags(s.songTags, pairs), queue: remapQueue(s.queue, pairs) }
   }),
 }))
 
@@ -1252,6 +1427,13 @@ async function restoreLibraryPrefs() {
       useStore.setState({ librarySongFirst: prefs.librarySongFirst })
     }
     if (prefs.noteNaming) store.setNoteNaming(prefs.noteNaming)
+    if (prefs.sargam && typeof prefs.sargam === 'object') {
+      const sa = prefs.sargam.sa, script = prefs.sargam.script
+      store.setSargam({
+        ...(sa === 'auto' || (Number.isInteger(sa) && sa >= 0 && sa <= 11) ? { sa } : {}),
+        ...(script === 'latin' || script === 'devanagari' ? { script } : {}),
+      })
+    }
     if (prefs.accidentals) store.setAccidentals(prefs.accidentals)
     if (prefs.chordTrackingMode === 'auto' || prefs.chordTrackingMode === 'harmony' || prefs.chordTrackingMode === 'follow') {
       store.setChordTrackingMode(prefs.chordTrackingMode)
@@ -1296,11 +1478,35 @@ async function restoreLibraryPrefs() {
       const p = prefs.explorerPositions?.[which]
       if (typeof p?.x === 'number' && typeof p?.y === 'number') store.setExplorerPosition(which, { x: p.x, y: p.y })
     }
-    useStore.setState({ settingsWindowFrame: restoreFrame(prefs.settingsWindowFrame) })
+    store.setSettingsWindowFrame(restoreFrame(prefs.settingsWindowFrame))
     if (prefs.tempoDisplay === 'bpm' || prefs.tempoDisplay === 'percent') useStore.setState({ tempoDisplay: prefs.tempoDisplay })
     if (typeof prefs.chordPrompterEnabled === 'boolean') store.setChordPrompterEnabled(prefs.chordPrompterEnabled)
     if (typeof prefs.chordTranscriptionEnabled === 'boolean') store.setChordTranscriptionEnabled(prefs.chordTranscriptionEnabled)
     if (typeof prefs.hideDemoFolder === 'boolean') store.setHideDemoFolder(prefs.hideDemoFolder)
+    if (typeof prefs.openWithAddsToLibrary === 'boolean') store.setOpenWithAddsToLibrary(prefs.openWithAddsToLibrary)
+    if (typeof prefs.showLyricsMark === 'boolean') store.setShowLyricsMark(prefs.showLyricsMark)
+    if (typeof prefs.showLanguageSwitcher === 'boolean') store.setShowLanguageSwitcher(prefs.showLanguageSwitcher)
+    if (Array.isArray(prefs.menuLanguages)) store.setMenuLanguages(prefs.menuLanguages.filter((c: unknown): c is string => typeof c === 'string'))
+    if (prefs.translationUpdates === 'download' || prefs.translationUpdates === 'wait') store.setTranslationUpdates(prefs.translationUpdates)
+    {
+      const tours = toursFromPrefs(prefs.tours)
+      useStore.setState({ toursSeen: tours.seen })
+      // an existing user's settings: written down as seen, once
+      if (tours.needsSave) window.electronAPI?.setPrefs?.({ tours: tours.seen })?.catch?.(() => {})
+    }
+    {
+      const tags: TagState = restoreTagState({ libraryTags: prefs.libraryTags, songTags: prefs.songTags, pinnedTags: prefs.pinnedTags })
+      useStore.setState({ libraryTags: tags.tags, songTags: tags.songTags, pinnedTags: tags.pinned })
+    }
+    if (typeof prefs.queueEnabled === 'boolean') useStore.setState({ queueEnabled: prefs.queueEnabled })
+    if (QUEUE_END_ACTIONS.includes(prefs.queueEndAction)) useStore.setState({ queueEndAction: prefs.queueEndAction })
+    useStore.setState({ queue: restoreQueue({ queuePaths: prefs.queuePaths, queueIndex: prefs.queueIndex }) })
+    if (typeof prefs.libraryWidth === 'number') useStore.setState({ libraryWidth: clampLibraryWidth(prefs.libraryWidth) })
+    if (prefs.lyricsIndex && typeof prefs.lyricsIndex === 'object') {
+      const index = Object.fromEntries(Object.entries(prefs.lyricsIndex as Record<string, any>).filter(([, v]) =>
+        v && typeof v.size === 'number' && typeof v.mtime === 'number' && typeof v.lyrics === 'boolean' && typeof v.v === 'number'))
+      useStore.setState({ lyricsIndex: index as Record<string, LyricsEntry> })
+    }
     if (prefs.splitBreakpointType === 'single' || prefs.splitBreakpointType === 'range') store.setSplitBreakpointType(prefs.splitBreakpointType)
     if (typeof prefs.splitBreakpointNote === 'number') store.setSplitBreakpointNote(prefs.splitBreakpointNote)
     if (typeof prefs.splitBreakpointRangeStart === 'number') store.setSplitBreakpointRangeStart(prefs.splitBreakpointRangeStart)
@@ -1327,6 +1533,8 @@ async function restoreLibraryPrefs() {
     if (typeof prefs.explorerPausesPlayback === 'boolean') store.setExplorerPausesPlayback(prefs.explorerPausesPlayback)
     if (typeof prefs.trackVuColorEnabled === 'boolean') store.setTrackVuColorEnabled(prefs.trackVuColorEnabled)
     if (typeof prefs.unsavedWarningEnabled === 'boolean') store.setUnsavedWarningEnabled(prefs.unsavedWarningEnabled)
+    if (typeof prefs.saveTrackChangesEnabled === 'boolean') store.setSaveTrackChangesEnabled(prefs.saveTrackChangesEnabled)
+    if (typeof prefs.portableKeyboards === 'boolean') store.setPortableKeyboards(prefs.portableKeyboards)
     if (typeof prefs.autoMuteNonKeyboard === 'boolean') store.setAutoMuteNonKeyboard(prefs.autoMuteNonKeyboard)
     if (prefs.settingsGroupsCollapsed && typeof prefs.settingsGroupsCollapsed === 'object' && !Array.isArray(prefs.settingsGroupsCollapsed)) {
       const defaults = store.settingsGroupsCollapsed
@@ -1344,11 +1552,91 @@ async function restoreLibraryPrefs() {
     if (prefs.hitEffectScope === 'keyboard' || prefs.hitEffectScope === 'all') store.setHitEffectScope(prefs.hitEffectScope)
     if (typeof prefs.hitEffectColor === 'string' || prefs.hitEffectColor === null) store.setHitEffectColor(prefs.hitEffectColor)
     if (prefs.selectedSoundfont === 'fluidr3-gm' || prefs.selectedSoundfont === 'musescore-general') store.setSelectedSoundfont(prefs.selectedSoundfont)
+    // The language in use (Follow system, or chosen before the tick list existed) is ticked, as the menu lists it
+    const menuNow = useStore.getState().menuLanguages
+    const menuWithInUse = withLanguageInUse(menuNow, currentLanguage, c => hasWords(c))
+    if (menuWithInUse !== menuNow) store.setMenuLanguages(menuWithInUse)
+    // New translations are fetched in the background; nothing waits on it
+    void checkTranslations({}).catch(() => {})
   } catch (e) {
     console.error('[Orfeo] restoreLibraryPrefs:', e)
   }
 }
-setTimeout(restoreLibraryPrefs, 500)
+// Settles once the saved Library and settings are back, so a file opened at
+// launch (double-clicked in the system) loads with them in place
+export const libraryRestored: Promise<void> = new Promise(done => {
+  setTimeout(() => { void restoreLibraryPrefs().finally(done) }, 500)
+})
+
+// ── Persist Library tags — only after the restore, debounced 1 s ──
+let _tagsTimer: ReturnType<typeof setTimeout> | null = null
+void libraryRestored.then(() => {
+  let seen = useStore.getState()
+  useStore.subscribe((state) => {
+    if (state.libraryTags === seen.libraryTags && state.songTags === seen.songTags && state.pinnedTags === seen.pinnedTags) return
+    seen = state
+    if (_tagsTimer) clearTimeout(_tagsTimer)
+    _tagsTimer = setTimeout(() => {
+      const s = useStore.getState()
+      window.electronAPI?.setPrefs?.({ libraryTags: s.libraryTags, songTags: s.songTags, pinnedTags: s.pinnedTags })?.catch?.(() => {})
+    }, 1000)
+  })
+})
+
+// ── Persist the practice queue — only after the restore, debounced 1 s — and move
+// its position to a queued song whenever one is opened, from wherever ──
+let _queueTimer: ReturnType<typeof setTimeout> | null = null
+void libraryRestored.then(() => {
+  let seen = useStore.getState()
+  useStore.subscribe((state) => {
+    if (state.midi !== seen.midi && state.queue.paths.length) {
+      const followed = followOpenSong(state.queue, (state.midi as any)?._filePath)
+      if (followed !== state.queue) { seen = state; useStore.setState({ queue: followed }); return }
+    }
+    const changed = state.queue !== seen.queue || state.queueEnabled !== seen.queueEnabled || state.queueEndAction !== seen.queueEndAction
+    seen = state
+    if (!changed) return
+    if (_queueTimer) clearTimeout(_queueTimer)
+    _queueTimer = setTimeout(() => {
+      const s = useStore.getState()
+      window.electronAPI?.setPrefs?.({ queueEnabled: s.queueEnabled, queueEndAction: s.queueEndAction, queuePaths: s.queue.paths, queueIndex: s.queue.index })?.catch?.(() => {})
+    }, 1000)
+  })
+})
+
+// ── Persist which tours have been seen — after the restore ──
+void libraryRestored.then(() => {
+  let seen = useStore.getState().toursSeen
+  useStore.subscribe((state) => {
+    if (state.toursSeen === seen) return
+    seen = state.toursSeen
+    window.electronAPI?.setPrefs?.({ tours: seen })?.catch?.(() => {})
+  })
+})
+
+// ── Persist the Settings window's place and size — after the restore, once a drag has settled ──
+let _settingsFrameTimer: ReturnType<typeof setTimeout> | null = null
+void libraryRestored.then(() => {
+  let seen = useStore.getState().settingsWindowFrame
+  useStore.subscribe((state) => {
+    if (state.settingsWindowFrame === seen) return
+    seen = state.settingsWindowFrame
+    if (_settingsFrameTimer) clearTimeout(_settingsFrameTimer)
+    _settingsFrameTimer = setTimeout(() => { window.electronAPI?.setPrefs?.({ settingsWindowFrame: useStore.getState().settingsWindowFrame })?.catch?.(() => {}) }, 600)
+  })
+})
+
+// ── Persist the Library tab's width — after the restore, once a drag has settled ──
+let _widthTimer: ReturnType<typeof setTimeout> | null = null
+void libraryRestored.then(() => {
+  let seen = useStore.getState().libraryWidth
+  useStore.subscribe((state) => {
+    if (state.libraryWidth === seen) return
+    seen = state.libraryWidth
+    if (_widthTimer) clearTimeout(_widthTimer)
+    _widthTimer = setTimeout(() => { window.electronAPI?.setPrefs?.({ libraryWidth: useStore.getState().libraryWidth })?.catch?.(() => {}) }, 600)
+  })
+})
 
 // ── Persist library-list state — favourites + hidden exclusions ───────────────
 // Debounced 1 s; gated on libraryFolder so it only fires once a library is set.
@@ -1381,10 +1669,24 @@ const _unsubTrust = useStore.subscribe((state) => {
   }, 2000)
 })
 
+// ── Persist lyrics check results — batched the same way, 2 s after the last change ──
+let _lyricsTimer: ReturnType<typeof setTimeout> | null = null
+let _lyricsSeen: object | null = null
+const _unsubLyrics = useStore.subscribe((state) => {
+  if (_lyricsSeen === null) { _lyricsSeen = state.lyricsIndex; return }
+  if (state.lyricsIndex === _lyricsSeen) return
+  _lyricsSeen = state.lyricsIndex
+  if (_lyricsTimer) clearTimeout(_lyricsTimer)
+  _lyricsTimer = setTimeout(() => {
+    window.electronAPI?.setPrefs?.({ lyricsIndex: useStore.getState().lyricsIndex })?.catch?.(() => {})
+  }, 2000)
+})
+
 // Persist display settings when they change
 // Use null sentinel so we never save on first subscriber fire (which would
 // overwrite the restored value before restoreLibraryPrefs has run)
 let _prevNoteNaming: string | null = null
+let _prevSargam: unknown = null
 let _prevAccidentals: string | null = null
 let _prevMasterVolume: number | null = null
 let _prevAudioEngine: string | null = null
@@ -1408,6 +1710,11 @@ let _prevNoteEditorToolbarY:   number  | null = null
 let _prevChordPrompterEnabled: boolean | null = null
 let _prevChordTranscriptionEnabled: boolean | null = null
 let _prevHideDemoFolder: boolean | null = null
+let _prevOpenWithAddsToLibrary: boolean | null = null
+let _prevShowLyricsMark: boolean | null = null
+let _prevShowLanguageSwitcher: boolean | null = null
+let _prevMenuLanguages: string[] | null = null
+let _prevTranslationUpdates: string | null = null
 let _prevSplitBreakpointType: string | null = null
 let _prevSplitBreakpointNote: number | null = null
 let _prevSplitBreakpointRangeStart: number | null = null
@@ -1432,6 +1739,8 @@ let _prevSupportNoteEnabled: boolean | null = null
 let _prevExplorerPausesPlayback: boolean | null = null
 let _prevTrackVuColorEnabled: boolean | null = null
 let _prevUnsavedWarningEnabled: boolean | null = null
+let _prevSaveTrackChangesEnabled: boolean | null = null
+let _prevPortableKeyboards: boolean | null = null
 let _prevAutoMuteNonKeyboard: boolean | null = null
 let _prevSettingsGroupsCollapsed: string | null = null
 let _prevNoteEditorWalkthroughSeen: boolean | null = null
@@ -1458,6 +1767,7 @@ const _unsubPrefs = useStore.subscribe((state) => {
   // Skip the very first fire (app init) — restore handles loading saved values
   if (_prevNoteNaming === null) {
     _prevNoteNaming = state.noteNaming
+    _prevSargam = state.sargam
     _prevAccidentals = state.accidentals
     _prevMasterVolume = state.masterVolume
     _prevAudioEngine = state.audioEngine
@@ -1481,6 +1791,11 @@ const _unsubPrefs = useStore.subscribe((state) => {
     _prevChordPrompterEnabled = state.chordPrompterEnabled
     _prevChordTranscriptionEnabled = state.chordTranscriptionEnabled
     _prevHideDemoFolder = state.hideDemoFolder
+    _prevOpenWithAddsToLibrary = state.openWithAddsToLibrary
+    _prevShowLyricsMark = state.showLyricsMark
+    _prevShowLanguageSwitcher = state.showLanguageSwitcher
+    _prevMenuLanguages = state.menuLanguages
+    _prevTranslationUpdates = state.translationUpdates
     _prevSplitBreakpointType = state.splitBreakpointType
     _prevSplitBreakpointNote = state.splitBreakpointNote
     _prevSplitBreakpointRangeStart = state.splitBreakpointRangeStart
@@ -1505,6 +1820,8 @@ const _unsubPrefs = useStore.subscribe((state) => {
     _prevExplorerPausesPlayback = state.explorerPausesPlayback
     _prevTrackVuColorEnabled = state.trackVuColorEnabled
     _prevUnsavedWarningEnabled = state.unsavedWarningEnabled
+    _prevSaveTrackChangesEnabled = state.saveTrackChangesEnabled
+    _prevPortableKeyboards = state.portableKeyboards
     _prevAutoMuteNonKeyboard = state.autoMuteNonKeyboard
     _prevSettingsGroupsCollapsed = JSON.stringify(state.settingsGroupsCollapsed)
     _prevNoteEditorWalkthroughSeen = state.noteEditorWalkthroughSeen
@@ -1531,6 +1848,7 @@ const _unsubPrefs = useStore.subscribe((state) => {
   }
   if (
     state.noteNaming !== _prevNoteNaming ||
+    state.sargam !== _prevSargam ||
     state.accidentals !== _prevAccidentals ||
     state.masterVolume !== _prevMasterVolume ||
     state.masterCompEnabled !== _prevMasterCompEnabled ||
@@ -1557,6 +1875,11 @@ const _unsubPrefs = useStore.subscribe((state) => {
     state.chordPrompterEnabled !== _prevChordPrompterEnabled ||
     state.chordTranscriptionEnabled !== _prevChordTranscriptionEnabled ||
     state.hideDemoFolder !== _prevHideDemoFolder ||
+    state.openWithAddsToLibrary !== _prevOpenWithAddsToLibrary ||
+    state.showLyricsMark !== _prevShowLyricsMark ||
+    state.showLanguageSwitcher !== _prevShowLanguageSwitcher ||
+    state.menuLanguages !== _prevMenuLanguages ||
+    state.translationUpdates !== _prevTranslationUpdates ||
     state.splitBreakpointType !== _prevSplitBreakpointType ||
     state.splitBreakpointNote !== _prevSplitBreakpointNote ||
     state.splitBreakpointRangeStart !== _prevSplitBreakpointRangeStart ||
@@ -1581,6 +1904,8 @@ const _unsubPrefs = useStore.subscribe((state) => {
     state.explorerPausesPlayback !== _prevExplorerPausesPlayback ||
     state.trackVuColorEnabled !== _prevTrackVuColorEnabled ||
     state.unsavedWarningEnabled !== _prevUnsavedWarningEnabled ||
+    state.saveTrackChangesEnabled !== _prevSaveTrackChangesEnabled ||
+    state.portableKeyboards !== _prevPortableKeyboards ||
     state.autoMuteNonKeyboard !== _prevAutoMuteNonKeyboard ||
     JSON.stringify(state.settingsGroupsCollapsed) !== _prevSettingsGroupsCollapsed ||
     state.noteEditorWalkthroughSeen !== _prevNoteEditorWalkthroughSeen ||
@@ -1602,6 +1927,7 @@ const _unsubPrefs = useStore.subscribe((state) => {
     state.progressionVoicing !== _prevProgressionVoicing
   ) {
     _prevNoteNaming = state.noteNaming
+    _prevSargam = state.sargam
     _prevAccidentals = state.accidentals
     _prevMasterVolume = state.masterVolume
     _prevAudioEngine = state.audioEngine
@@ -1625,6 +1951,11 @@ const _unsubPrefs = useStore.subscribe((state) => {
     _prevChordPrompterEnabled = state.chordPrompterEnabled
     _prevChordTranscriptionEnabled = state.chordTranscriptionEnabled
     _prevHideDemoFolder = state.hideDemoFolder
+    _prevOpenWithAddsToLibrary = state.openWithAddsToLibrary
+    _prevShowLyricsMark = state.showLyricsMark
+    _prevShowLanguageSwitcher = state.showLanguageSwitcher
+    _prevMenuLanguages = state.menuLanguages
+    _prevTranslationUpdates = state.translationUpdates
     _prevSplitBreakpointType = state.splitBreakpointType
     _prevSplitBreakpointNote = state.splitBreakpointNote
     _prevSplitBreakpointRangeStart = state.splitBreakpointRangeStart
@@ -1649,6 +1980,8 @@ const _unsubPrefs = useStore.subscribe((state) => {
     _prevExplorerPausesPlayback = state.explorerPausesPlayback
     _prevTrackVuColorEnabled = state.trackVuColorEnabled
     _prevUnsavedWarningEnabled = state.unsavedWarningEnabled
+    _prevSaveTrackChangesEnabled = state.saveTrackChangesEnabled
+    _prevPortableKeyboards = state.portableKeyboards
     _prevAutoMuteNonKeyboard = state.autoMuteNonKeyboard
     _prevSettingsGroupsCollapsed = JSON.stringify(state.settingsGroupsCollapsed)
     _prevNoteEditorWalkthroughSeen = state.noteEditorWalkthroughSeen
@@ -1673,6 +2006,7 @@ const _unsubPrefs = useStore.subscribe((state) => {
     _prevProgressionVoicing = state.progressionVoicing
     window.electronAPI?.setPrefs?.({
       noteNaming: state.noteNaming,
+      sargam: state.sargam,
       accidentals: state.accidentals,
       masterVolume: state.masterVolume,
       masterCompEnabled: state.masterCompEnabled,
@@ -1699,6 +2033,11 @@ const _unsubPrefs = useStore.subscribe((state) => {
       chordPrompterEnabled: state.chordPrompterEnabled,
       chordTranscriptionEnabled: state.chordTranscriptionEnabled,
       hideDemoFolder: state.hideDemoFolder,
+      openWithAddsToLibrary: state.openWithAddsToLibrary,
+      showLyricsMark: state.showLyricsMark,
+      showLanguageSwitcher: state.showLanguageSwitcher,
+      menuLanguages: state.menuLanguages,
+      translationUpdates: state.translationUpdates,
       splitBreakpointType: state.splitBreakpointType,
       splitBreakpointNote: state.splitBreakpointNote,
       splitBreakpointRangeStart: state.splitBreakpointRangeStart,
@@ -1724,6 +2063,8 @@ const _unsubPrefs = useStore.subscribe((state) => {
       explorerPausesPlayback: state.explorerPausesPlayback,
       trackVuColorEnabled: state.trackVuColorEnabled,
       unsavedWarningEnabled: state.unsavedWarningEnabled,
+      saveTrackChangesEnabled: state.saveTrackChangesEnabled,
+      portableKeyboards: state.portableKeyboards,
       autoMuteNonKeyboard: state.autoMuteNonKeyboard,
       settingsGroupsCollapsed: state.settingsGroupsCollapsed,
       noteEditorWalkthroughSeen: state.noteEditorWalkthroughSeen,

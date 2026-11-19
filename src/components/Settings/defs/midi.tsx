@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
-import { KeyboardMusic, Zap, Timer, Speaker, Feather, Copy, Footprints, Stethoscope, Wrench, RefreshCw, FileDown, Plug } from 'lucide-react'
+import { KeyboardMusic, Zap, Timer, Speaker, Feather, Copy, Footprints, Stethoscope, Wrench, RefreshCw, FileDown, Plug, Lightbulb } from 'lucide-react'
 import { useStore } from '../../../store'
 import { t } from '../../../utils/i18n'
-import { OptionBtn, Switch, SettingsDropdown, HelpText, GlanceLine, ZoomStepBtn } from '../controls'
+import { OptionBtn, Switch, SettingsDropdown, HelpText, GlanceLine, ZoomStepBtn, ButtonRow } from '../controls'
+import Tooltip from '../../Tooltip'
 import { MarqueeText } from '../../MarqueeText'
 import { useMidiSettings, MIDI_DEFAULTS, type ControlKind, type LiveResponse, type VelocityCurve } from '../../../store/midiSettings'
-import { rescanMidiDevices, clearStuckNotes, resetMidiInput } from '../../../hooks/useMidiInput'
+import { rescanMidiDevices, clearStuckNotes, resetMidiInput, rangeOf, measureKeyboardRange, forgetKeyboard, showRangePromptForTest, pressRangeKeyForTest } from '../../../hooks/useMidiInput'
+import { keyCount, rangeLabel } from '../../../utils/keyboardRange'
+import { lightSetupFor, setLightSetup, tryKeyLights, lightChordForTest, litKeysOn } from '../../../hooks/keyLightsOutput'
+import { buildKeyLayoutRatios } from '../../../utils/keyLayout'
+import { isBlackKey } from '../../../utils/midiParser'
+import { choiceOf, setupForChoice, type KeyLightChoice } from '../../../utils/keyLights'
 import { reopenGmOutput } from '../../../hooks/useAudioEngine'
 import { getStartedStable } from '../../../hooks/useSamplesEngine'
 import { getDelayBreakdown, getStats, counters, exportPerformanceLog, clearDiagnostics } from '../../../utils/midiDiagnostics'
@@ -37,10 +43,10 @@ function SwitchRow({ label, value, onChange, dim, note }: { label: string; value
   )
 }
 
-function ActionBtn({ onClick, children, icon }: { onClick: () => void; children: ReactNode; icon?: ReactNode }) {
-  return (
+function ActionBtn({ onClick, children, icon, tip }: { onClick: () => void; children: ReactNode; icon?: ReactNode; tip?: string }) {
+  const btn = (
     <button onClick={onClick}
-      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '5px 8px', width: '100%',
+      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, padding: '5px 14px', width: '100%', whiteSpace: 'nowrap',
         borderRadius: 4, border: '1px solid var(--border2)', background: 'var(--bg-modal)', color: 'var(--text-inactive)',
         fontSize: 'var(--text-xs)', fontFamily: 'var(--font-ui)', cursor: 'pointer' }}
       onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-amber)'; e.currentTarget.style.borderColor = 'var(--text-amber)' }}
@@ -48,6 +54,8 @@ function ActionBtn({ onClick, children, icon }: { onClick: () => void; children:
       {icon}{children}
     </button>
   )
+  // the tooltip's amber title is the button's own name, the explanation goes under it
+  return tip ? <Tooltip title={typeof children === 'string' ? children : ''} description={tip} wrapperStyle={{ minWidth: 0 }}>{btn}</Tooltip> : btn
 }
 
 function Stepper({ value, min, max, step, format, onChange, label }: {
@@ -88,42 +96,69 @@ function KeyboardsControl() {
   const active = useMidiSettings(s => s.activeDevice)
   const error = useMidiSettings(s => s.accessError)
   const toggle = (key: string) => set({ selectedDevices: selected.includes(key) ? selected.filter(k => k !== key) : [...selected, key] })
+  const picking = listenMode === 'selected'
   return (
-    <>
-      <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', columnGap: 24, alignItems: 'start' }}>
+      <ButtonRow>
         <OptionBtn active={listenMode === 'all'} onClick={() => set({ listenMode: 'all' })}>{t`Listen to all`}</OptionBtn>
         <OptionBtn active={listenMode === 'selected'} onClick={() => set({ listenMode: 'selected' })}>{t`Select`}</OptionBtn>
-      </div>
-      <div style={{ marginTop: 8, display: 'grid', gap: 2 }}>
+      </ButtonRow>
+      <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
         {error && <HelpText>{t`MIDI isn't available: ${error}`}</HelpText>}
         {!error && devices.length === 0 && <HelpText>{t`Plug one in by USB — it appears here straight away.`}</HelpText>}
         {devices.map(d => {
           const listening = listenMode === 'all' || selected.includes(d.key)
           return (
-            <div key={d.key} style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr) auto', alignItems: 'center', columnGap: 8, minHeight: 30,
+            // the tick box has a column of its own, before the light, so it never sits over the name
+            <div key={d.key} style={{ display: 'grid', gridTemplateColumns: picking ? 'auto auto minmax(0, 1fr)' : 'auto minmax(0, 1fr)', alignItems: 'center', columnGap: 8, minHeight: 30,
               fontSize: 'var(--text-xs)', fontFamily: 'var(--font-ui)' }}>
+              {picking && <input type="checkbox" checked={selected.includes(d.key)} onChange={() => toggle(d.key)} aria-label={t`Listen: ${d.name}`} style={{ accentColor: 'var(--text-amber)', cursor: 'pointer', margin: 0 }} />}
               <ActivityLight at={activity[d.key]} connected={d.connected} />
               <span style={{ minWidth: 0, display: 'grid' }}>
                 <span style={{ display: 'flex', minWidth: 0 }}>
                   <MarqueeText name={d.name} spanStyle={{ color: d.connected ? (d.key === active ? 'var(--text-amber)' : 'var(--text-default)') : 'var(--text-muted)', fontWeight: d.key === active ? 600 : 400 }} />
                 </span>
-                <span style={{ fontSize: 9, color: 'var(--text-muted)', lineHeight: 1.3 }}>
-                  {!d.connected ? t`unplugged` : d.key === active ? t`playing` : listening ? t`ready` : t`not listened to`}
+                <span style={{ fontSize: 9, color: 'var(--text-muted)', lineHeight: 1.3, display: 'flex', flexWrap: 'wrap', columnGap: 4 }}>
+                  <span>{!d.connected ? t`unplugged` : d.key === active ? t`playing` : listening ? t`ready` : t`not listened to`}</span>
+                  {d.virtual && <span>· virtual port</span>}
+                  {!d.virtual && <KeysNote deviceKey={d.key} connected={d.connected} />}
+                  {!d.connected && <span>· <TextLink onClick={() => forgetKeyboard(d.key)}>{t`Forget`}</TextLink></span>}
                 </span>
               </span>
-              {listenMode === 'selected'
-                ? <input type="checkbox" checked={selected.includes(d.key)} onChange={() => toggle(d.key)} aria-label={t`Listen to ${d.name}`} style={{ accentColor: 'var(--text-amber)', cursor: 'pointer' }} />
-                : <span />}
             </div>
           )
         })}
       </div>
-    </>
+    </div>
   )
 }
 
-function KeyboardsExtra() {
-  return simAvailable ? <SimulatorPanel /> : null
+// A small underlined action under a keyboard's name
+function TextLink({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+  return (
+    <button onClick={onClick}
+      style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 9, fontFamily: 'var(--font-ui)', color: 'var(--text-inactive)', textDecoration: 'underline', textUnderlineOffset: 2 }}
+      onMouseEnter={e => e.currentTarget.style.color = 'var(--text-amber)'}
+      onMouseLeave={e => e.currentTarget.style.color = 'var(--text-inactive)'}>
+      {children}
+    </button>
+  )
+}
+
+// "· 61 keys, C2–C7 · Measure again" under a keyboard's name — the range the
+// player showed Orfeo (KeyboardRangePrompt), which sizes the on-screen keyboard
+function KeysNote({ deviceKey, connected }: { deviceKey: string; connected: boolean }) {
+  useMidiSettings(s => s.keyRanges); useMidiSettings(s => s.simRanges); useMidiSettings(s => s.devices)
+  const naming = useStore(s => s.noteNaming)
+  const acc = useStore(s => s.accidentals)
+  const r = rangeOf(deviceKey)
+  const link = (label: string) => <TextLink onClick={() => measureKeyboardRange(deviceKey)}>{label}</TextLink>
+  return (
+    <>
+      {r && <span>· {t`${keyCount(r)} keys, ${rangeLabel(r, naming, acc)}`}</span>}
+      {connected && <span>· {link(r ? t`Measure again` : t`Measure keys`)}</span>}
+    </>
+  )
 }
 
 // ── Reconnect automatically ──────────────────────────────────────────────────
@@ -132,14 +167,18 @@ function ReconnectControl() {
   return <Switch value={v} onChange={x => set({ autoReconnect: x })} label={t`Reconnect automatically`} />
 }
 function ReconnectExtra() {
-  return <div style={{ marginTop: 10 }}><ActionBtn onClick={() => void rescanMidiDevices()} icon={<RefreshCw size={11} strokeWidth={1.5} />}>{t`Rescan keyboards`}</ActionBtn></div>
+  return <div style={{ marginTop: 10 }}><ButtonRow><ActionBtn onClick={() => void rescanMidiDevices()} icon={<RefreshCw size={11} strokeWidth={1.5} />}>{t`Rescan keyboards`}</ActionBtn></ButtonRow></div>
 }
 
 // ── Development builds only: pretend keyboards are plugged in ────────────────
-function SimulatorPanel() {
+const SIM_NOTES = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B']
+const simNoteName = (n: number) => SIM_NOTES[n % 12] + (Math.floor(n / 12) - 1)
+
+export function SimulatorPanel() {
   useMidiSettings(s => s.devices)  // re-render on plug / unplug
   const [target, setTarget] = useState(sim.models[0].key)
   const plugged = sim.isPlugged(target)
+  const { low, high } = sim.models.find(m => m.key === target)!
   const btn = (label: string, fn: () => void) => (
     <button key={label} onClick={fn} disabled={!plugged && label !== t`Plug in`}
       style={{ padding: '3px 6px', borderRadius: 4, border: '1px dashed var(--border2)', background: 'transparent', color: 'var(--text-inactive)',
@@ -151,12 +190,14 @@ function SimulatorPanel() {
       <div style={{ display: 'flex', gap: 'var(--space-1)', marginBottom: 6 }}>
         {sim.models.map(m => (
           <OptionBtn key={m.key} active={target === m.key} onClick={() => setTarget(m.key)}>
-            {m.key === 's88' ? 'S88 MK3' : m.key === 'mpk' ? 'MPK mini' : 'Launchkey'}
+            {m.key === 's88' ? 'S88 MK3' : m.key === 'mpk' ? 'MPK mini' : m.key === 'partykeys' ? 'PartyKeys' : m.key === 'loopmidi' ? 'loopMIDI' : 'Launchkey'}
           </OptionBtn>
         ))}
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
         {plugged ? btn(t`Unplug`, () => sim.unplug(target)) : btn(t`Plug in`, () => sim.plug(target))}
+        {low != null && btn(`Lowest key (${simNoteName(low)})`, () => sim.tap(target, low))}
+        {high != null && btn(`Highest key (${simNoteName(high)})`, () => sim.tap(target, high))}
         {btn(t`C major chord`, () => sim.chord(target, [48, 60, 64, 67]))}
         {btn(t`Run`, () => sim.run(target))}
         {btn(t`Pedal down`, () => sim.pedal(target, true))}
@@ -166,6 +207,165 @@ function SimulatorPanel() {
         {btn(t`Aftertouch`, () => { sim.aftertouch(target, 100); setTimeout(() => sim.aftertouch(target, 0), 600) })}
         {btn(t`Double key`, () => sim.doubleTrigger(target))}
         {btn(t`Unplug mid-note`, () => sim.stuckNote(target))}
+      </div>
+    </div>
+  )
+}
+
+// ── Dev Tools: the keyboard-range pop-up for a pretend keyboard ──────────────
+// Any key counts (a real or simulated keyboard, or the buttons); nothing is
+// saved, only the on-screen keyboard size changes, as it would for real.
+export function KeyRangeTestPanel() {
+  const open = useMidiSettings(s => s.rangePrompt?.test === true)
+  const btn = (label: string, fn: () => void, enabled = true) => (
+    <button key={label} onClick={fn} disabled={!enabled}
+      style={{ padding: '3px 6px', borderRadius: 4, border: '1px dashed var(--border2)', background: 'transparent', color: 'var(--text-inactive)',
+        fontSize: 10, fontFamily: 'var(--font-ui)', cursor: enabled ? 'pointer' : 'default', opacity: enabled ? 1 : 0.4 }}>{label}</button>
+  )
+  return (
+    <div style={{ marginTop: 12, padding: 8, border: '1px dashed var(--border2)', borderRadius: 4 }}>
+      <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 6 }}>Keyboard range · saves nothing</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+        {btn('Show the pop-up', showRangePromptForTest, !open)}
+        {btn('Press A0', () => pressRangeKeyForTest(21), open)}
+        {btn('Press E1', () => pressRangeKeyForTest(28), open)}
+        {btn('Press C2', () => pressRangeKeyForTest(36), open)}
+        {btn('Press C7', () => pressRangeKeyForTest(96), open)}
+        {btn('Press G7', () => pressRangeKeyForTest(103), open)}
+        {btn('Press C8', () => pressRangeKeyForTest(108), open)}
+      </div>
+    </div>
+  )
+}
+
+// ── Key lights ───────────────────────────────────────────────────────────────
+// Per connected keyboard: how its lights follow the song (hooks/keyLightsOutput.ts)
+function KeyLightsControl() {
+  const devices = useMidiSettings(s => s.devices)
+  useMidiSettings(s => s.keyLights); useMidiSettings(s => s.simKeyLights)
+  const connected = devices.filter(d => d.connected)
+  const modes: { value: KeyLightChoice; label: string }[] = [
+    { value: 'off', label: t`Off` },
+    { value: 'yamaha', label: t`Yamaha (channel 1)` },
+    { value: 'casio', label: t`Casio, Akai (channel 3)` },
+    { value: 'notes', label: t`Note messages, any channel` },
+    { value: 'partykeys', label: t`PartyKeys` },
+    { value: 'fingers', label: t`LED strips and iPiano (finger channels)` },
+    { value: 'onesmart', label: t`The ONE Smart Piano` },
+    { value: 'vangoa', label: t`Vangoa` },
+  ]
+  return (
+    <div style={{ display: 'grid', rowGap: 12 }}>
+      {connected.length === 0 && <HelpText>{t`Plug in a keyboard with lighted keys: it appears here.`}</HelpText>}
+      {connected.map(d => {
+        const setup = lightSetupFor(d.key)
+        return (
+          <div key={d.key} style={{ display: 'grid', rowGap: 6 }}>
+            <span style={{ display: 'flex', minWidth: 0, fontSize: 'var(--text-xs)', fontFamily: 'var(--font-ui)' }}>
+              <MarqueeText name={d.name} spanStyle={{ color: 'var(--text-default)' }} />
+            </span>
+            <SettingsDropdown value={choiceOf(setup)} options={modes} onChange={(c) => setLightSetup(d.key, setupForChoice(c, setup))} />
+            {choiceOf(setup) === 'notes' && (
+              <Stepper label={t`Channel`} value={setup.channel} min={1} max={16} step={1} format={v => String(v)}
+                onChange={(channel) => setLightSetup(d.key, { ...setup, channel })} />
+            )}
+            {setup.mode !== 'off' && <ButtonRow><ActionBtn onClick={tryKeyLights} icon={<Lightbulb size={11} strokeWidth={1.5} />}>{t`Try it: light a scale`}</ActionBtn></ButtonRow>}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// Switched on: what to choose and the keyboards (left), how to find the right
+// choice (right, amber-framed)
+function KeyLightsExtra() {
+  const on = useMidiSettings(s => s.keyLightsEnabled)
+  if (!on) return null
+  return (
+    <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', columnGap: 16, alignItems: 'start' }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-faint)', lineHeight: 1.5, fontFamily: 'var(--font-ui)', fontStyle: 'italic', marginBottom: 10 }}>
+          {t`The menu under each plugged-in keyboard sets how Orfeo switches its lights on. Pick the one for your keyboard, then press Try it to check.`}
+        </div>
+        <KeyLightsControl />
+      </div>
+      <div style={{ minWidth: 0, border: '1px solid var(--accent-amber-strong)', borderRadius: 'var(--radius-md)', padding: '8px 12px 10px' }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-amber)', fontWeight: 600, fontFamily: 'var(--font-ui)' }}>{t`Not sure? Find the channel like this:`}</div>
+        <HelpText><b style={{ fontWeight: 700, color: 'var(--text-default)', fontStyle: 'normal' }}>1.</b> {t`Pick Yamaha (channel 1) and press Try it.\nWatch the keys: a scale should light up.`}</HelpText>
+        <HelpText><b style={{ fontWeight: 700, color: 'var(--text-default)', fontStyle: 'normal' }}>2.</b> {t`Nothing lit? Pick Casio, Akai (channel 3) and press Try it again.`}</HelpText>
+        <HelpText><b style={{ fontWeight: 700, color: 'var(--text-default)', fontStyle: 'normal' }}>3.</b> {t`Still dark? Pick Note messages, any channel. Raise the channel by one and press Try it, until the scale lights. There are 16 channels.`}</HelpText>
+        <HelpText><b style={{ fontWeight: 700, color: 'var(--text-default)', fontStyle: 'normal' }}>4.</b> {t`Nothing on any channel? Look in the keyboard's manual for “light”, “key light” or “guide”. Some keyboards only follow the computer in a lesson or light mode, which you switch on at the keyboard.`}</HelpText>
+        <HelpText>{t`A keyboard with its own speakers may also play the notes it lights, very quietly: turn its volume down.`}</HelpText>
+      </div>
+    </div>
+  )
+}
+function KeyLightsSwitch() {
+  const v = useMidiSettings(s => s.keyLightsEnabled)
+  return <Switch value={v} onChange={x => set({ keyLightsEnabled: x })} label={t`Key lights`} />
+}
+
+// ── Dev Tools: the simulated keyboard's keys, lit as the lights messages say ─
+function SimLitKeys({ low, high, lit }: { low: number; high: number; lit: Map<number, [number, number, number]> }) {
+  const layout = buildKeyLayoutRatios(low, high)
+  return (
+    <div aria-hidden="true" style={{ position: 'relative', height: 30, margin: '2px 0 8px', borderRadius: 3, overflow: 'hidden', background: 'var(--key-white-bg)' }}>
+      {layout.map((k, i) => {
+        const n = low + i
+        const black = isBlackKey(n)
+        const c = lit.get(n)
+        return (
+          <div key={n} title={String(n)} style={{
+            position: 'absolute', left: `${k.x * 100}%`, width: `${k.width * 100}%`, top: 0, height: black ? '60%' : '100%', zIndex: black ? 1 : 0,
+            boxSizing: 'border-box', borderRight: black ? 'none' : '1px solid var(--key-white-border)',
+            background: c ? `rgb(${c[0]}, ${c[1]}, ${c[2]})` : black ? 'var(--border-row)' : 'var(--key-white-bg)',
+          }} />
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Dev Tools: key lights on a simulated keyboard, with what was sent ───────
+export function KeyLightsTestPanel() {
+  useMidiSettings(s => s.devices); useMidiSettings(s => s.simKeyLights)
+  const [target, setTarget] = useState('partykeys')
+  const [, tick] = useState(0)
+  useEffect(() => { const id = setInterval(() => tick(n => n + 1), 300); return () => clearInterval(id) }, [])
+  const model = sim.models.find(m => m.key === target)!
+  const plugged = sim.isPlugged(target)
+  const devKey = model.ports[0].replace(/ MIDI$/, '')
+  const setup = plugged ? lightSetupFor(devKey) : null
+  const lit = plugged ? litKeysOn(devKey) : new Map()
+  const sent = sim.sentTo(target).slice(-5).map(b => b.map(x => x.toString(16).padStart(2, '0').toUpperCase()).join(' '))
+  const btn = (label: string, fn: () => void, enabled = true, active = false) => (
+    <button key={label} onClick={fn} disabled={!enabled}
+      style={{ padding: '3px 6px', borderRadius: 4, border: '1px dashed ' + (active ? 'var(--text-amber)' : 'var(--border2)'), background: 'transparent',
+        color: active ? 'var(--text-amber)' : 'var(--text-inactive)', fontSize: 10, fontFamily: 'var(--font-ui)', cursor: enabled ? 'pointer' : 'default', opacity: enabled ? 1 : 0.4 }}>{label}</button>
+  )
+  return (
+    <div style={{ marginTop: 12, padding: 8, border: '1px dashed var(--border2)', borderRadius: 4 }}>
+      <div style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: 6 }}>Key lights · simulated keyboards, session only</div>
+      {!useMidiSettings.getState().keyLightsEnabled && <div style={{ fontSize: 9, color: 'var(--text-amber)', marginBottom: 6 }}>Key lights are switched off: turn them on under MIDI Keyboard › Key lights first.</div>}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+        {sim.models.map(m => btn(m.key === 'partykeys' ? 'PartyKeys' : m.key === 's88' ? 'S88 MK3' : m.key === 'mpk' ? 'MPK mini' : m.key === 'loopmidi' ? 'loopMIDI' : 'Launchkey', () => setTarget(m.key), true, target === m.key))}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+        {plugged ? btn('Unplug', () => sim.unplug(target)) : btn('Plug in', () => sim.plug(target))}
+        {btn('Off', () => setLightSetup(devKey, { mode: 'off', channel: 1 }), plugged, setup?.mode === 'off')}
+        {btn('Notes ch 1', () => setLightSetup(devKey, { mode: 'notes', channel: 1 }), plugged, setup?.mode === 'notes' && setup.channel === 1)}
+        {btn('Casio ch 3', () => setLightSetup(devKey, { mode: 'notes', channel: 3, brand: 'casio' }), plugged, setup?.mode === 'notes' && setup.channel === 3)}
+        {btn('PartyKeys', () => setLightSetup(devKey, { mode: 'partykeys', channel: 1 }), plugged, setup?.mode === 'partykeys')}
+        {btn('iPiano', () => setLightSetup(devKey, { mode: 'fingers', channel: 1 }), plugged, setup?.mode === 'fingers')}
+        {btn('ONE', () => setLightSetup(devKey, { mode: 'onesmart', channel: 1 }), plugged, setup?.mode === 'onesmart')}
+        {btn('Vangoa', () => setLightSetup(devKey, { mode: 'vangoa', channel: 1 }), plugged, setup?.mode === 'vangoa')}
+        {btn('Light C major', () => lightChordForTest([60, 64, 67]), plugged)}
+        {btn('Try it', tryKeyLights, plugged)}
+      </div>
+      {plugged && <SimLitKeys low={model.low ?? 21} high={model.high ?? 108} lit={lit} />}
+      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted)', lineHeight: 1.5, minHeight: 40, wordBreak: 'break-all' }}>
+        {sent.length ? sent.map((s, i) => <div key={i}>{s}</div>) : 'Nothing sent yet.'}
       </div>
     </div>
   )
@@ -195,9 +395,9 @@ function LiveResponseControl() {
           : t`Native is sharing the sound card with other apps, which adds Windows' usual delay. For the shortest delay choose Exclusive under Settings › Audio › Sound engine.`}</HelpText>}
         {engine === 'samples' && (
           <>
-            <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+            <ButtonRow>
               {RESPONSES.map(r => <OptionBtn key={r.v} active={v === r.v} title={r.hint} oneLine onClick={() => set({ liveResponse: r.v })}>{r.label}</OptionBtn>)}
-            </div>
+            </ButtonRow>
             <HelpText>{v === 'low'
               ? t`Your keys skip the song's compressor and limiter, and are heard about 12 ms sooner.`
               : v === 'balanced'
@@ -211,7 +411,10 @@ function LiveResponseControl() {
         <div style={{ minWidth: 0 }}>
           {heading(t`When a keyboard is plugged in`)}
           <SwitchRow label={t`Auto-switch to Exclusive`} value={autoLow} onChange={x => set({ autoLowLatency: x })} />
-          <HelpText>{t`Recommended when you play along on a keyboard and nothing else on the computer needs sound: plugging a keyboard in switches Native to Exclusive, for the shortest delay; unplugging the last one switches back to Shared. Off: Native stays in the mode you choose.`}</HelpText>
+          <HelpText>{t`Recommended when you play along on a keyboard and nothing else on the computer needs sound.`}</HelpText>
+          <HelpText><b style={{ fontWeight: 600, fontStyle: 'normal', color: 'var(--text-default)' }}>{t`Keyboard plugged in:`}</b> {t`Native switches to Exclusive, for the shortest delay.`}</HelpText>
+          <HelpText><b style={{ fontWeight: 600, fontStyle: 'normal', color: 'var(--text-default)' }}>{t`Keyboard unplugged:`}</b> {t`once no keyboard is plugged in any more, Native switches back to Shared.`}</HelpText>
+          <HelpText>{t`Switched off, Native stays in the mode you choose.`}</HelpText>
         </div>
       )}
     </div>
@@ -226,10 +429,11 @@ function KeyToEarGlance() {
   useEffect(() => { const id = setInterval(() => tick(n => n + 1), 1000); return () => clearInterval(id) }, [])
   const b = getDelayBreakdown()
   const st = getStats()
-  const style = { fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-inactive)' } as const
-  if (b.outputMs === null) return <span style={style}>{t`Keyboard → speaker: can't be measured for this sound output`}</span>
+  // two lines, so the tab names beside it keep to one line each
+  const style = { display: 'grid', fontSize: 10, fontFamily: 'var(--font-mono)', color: 'var(--text-inactive)', textAlign: 'right', lineHeight: 1.35, whiteSpace: 'nowrap' } as const
+  if (b.outputMs === null) return <span style={style}><span>{t`Keyboard → speaker`}</span><span>{t`can't be measured for this sound output`}</span></span>
   const total = (st.avgInputMs ?? 0) + (st.avgHandleMs ?? 0) + b.synthBlockMs + b.chainMs + b.outputMs
-  return <span style={style}>{t`Keyboard → speaker on this computer: about`} <span style={{ color: 'var(--text-amber)' }}>{Math.round(total)} ms</span></span>
+  return <span style={style}><span>{t`Keyboard → speaker`}</span><span>{t`on this computer: about`} <span style={{ color: 'var(--text-amber)' }}>{Math.round(total)} ms</span></span></span>
 }
 
 // "No keyboards connected" — at the right of the Keyboards tab row, only while none is
@@ -249,7 +453,7 @@ function LatencyOffsetControl() {
     <>
       <Stepper label={t`Shift by`} value={v} min={-100} max={100} step={10}
         format={x => (x > 0 ? `+${x} ms` : `${x} ms`)} onChange={x => set({ latencyOffsetMs: x })} />
-      {v !== 0 && <div style={{ marginTop: 4 }}><ActionBtn onClick={() => set({ latencyOffsetMs: 0 })}>{t`Back to measured only`}</ActionBtn></div>}
+      {v !== 0 && <div style={{ marginTop: 4 }}><ButtonRow><ActionBtn onClick={() => set({ latencyOffsetMs: 0 })}>{t`Back to measured only`}</ActionBtn></ButtonRow></div>}
     </>
   )
 }
@@ -280,7 +484,9 @@ function GmOutputControl() {
   ]
   return (
     <>
-      <SettingsDropdown value={gmOutput} options={options} onChange={(v) => { set({ gmOutput: v }); void reopenGmOutput() }} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+        <SettingsDropdown value={gmOutput} options={options} onChange={(v) => { set({ gmOutput: v }); void reopenGmOutput() }} />
+      </div>
       {missing && <HelpText>{t`That instrument isn't connected — General MIDI uses Orfeo's own synth until it's back.`}</HelpText>}
       {!!gmOutput && !missing && <HelpText>{t`Pick only an instrument with its own sounds — a keyboard without speakers would play nothing.`}</HelpText>}
     </>
@@ -294,9 +500,9 @@ const CURVES: { v: VelocityCurve; label: string }[] = [
 function TouchControl() {
   const v = useMidiSettings(s => s.velocityCurve)
   return (
-    <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+    <ButtonRow>
       {CURVES.map(c => <OptionBtn key={c.v} active={v === c.v} onClick={() => set({ velocityCurve: c.v })}>{c.label}</OptionBtn>)}
-    </div>
+    </ButtonRow>
   )
 }
 function TouchExtra() {
@@ -320,9 +526,9 @@ function TouchExtra() {
 function DuplicateControl() {
   const v = useMidiSettings(s => s.duplicateFilterMs)
   return (
-    <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+    <ButtonRow>
       {[0, 10, 20, 40].map(x => <OptionBtn key={x} active={v === x} onClick={() => set({ duplicateFilterMs: x })}>{x === 0 ? t`Off` : `${x} ms`}</OptionBtn>)}
-    </div>
+    </ButtonRow>
   )
 }
 function DuplicateGlance() {
@@ -407,9 +613,11 @@ function DelayCheckExtra() {
     <>
       <HelpText>{t`The sound output part is set by the system and your sound card: wired headphones or a USB audio interface lower it, Bluetooth raises it a lot.`}</HelpText>
       <HelpText>{t`Start over forgets the notes measured so far; the fixed parts of the trip don't change.`}</HelpText>
-      <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 6 }}>
-        <ActionBtn onClick={exportPerformanceLog} icon={<FileDown size={11} strokeWidth={1.5} />}>{t`Save log…`}</ActionBtn>
-        <ActionBtn onClick={clearDiagnostics}>{t`Start over`}</ActionBtn>
+      <div style={{ marginTop: 8 }}>
+        <ButtonRow gap={6}>
+          <ActionBtn onClick={exportPerformanceLog} icon={<FileDown size={11} strokeWidth={1.5} />}>{t`Save log…`}</ActionBtn>
+          <ActionBtn onClick={clearDiagnostics}>{t`Start over`}</ActionBtn>
+        </ButtonRow>
       </div>
     </>
   )
@@ -429,16 +637,16 @@ function ToolsControl() {
     if (hadGmOutput) void reopenGmOutput()
   }
   return (
-    <div style={{ display: 'grid', gap: 6 }}>
-      <ActionBtn onClick={clearStuckNotes}>{t`Clear stuck notes`}</ActionBtn>
-      <ActionBtn onClick={() => void resetMidiInput()}>{t`Reset MIDI input`}</ActionBtn>
-      <ActionBtn onClick={() => void resetSettings()}>{t`Reset settings`}</ActionBtn>
-    </div>
+    <ButtonRow gap={6}>
+      <ActionBtn onClick={clearStuckNotes} tip={t`Lets go of every key and pedal, so notes that keep sounding stop.`}>{t`Clear stuck notes`}</ActionBtn>
+      <ActionBtn onClick={() => void resetMidiInput()} tip={t`Lets go of every key, then reconnects every keyboard, as if you unplugged it and plugged it back in.`}>{t`Reset MIDI input`}</ActionBtn>
+      <ActionBtn onClick={() => void resetSettings()} tip={t`Puts everything on this page back to how it started. Asks first; your keyboards stay connected.`}>{t`Reset settings`}</ActionBtn>
+    </ButtonRow>
   )
 }
 
 export const MIDI_DEFS: SettingDef[] = [
-  { id: 'midiKeyboards', icon: KeyboardMusic, kind: 'choice', Control: KeyboardsControl, Extra: KeyboardsExtra },
+  { id: 'midiKeyboards', icon: KeyboardMusic, kind: 'choice', Control: KeyboardsControl },
   { id: 'midiReconnect', icon: Plug, kind: 'switch', Control: ReconnectControl, Extra: ReconnectExtra },
   { id: 'liveResponse', icon: Zap, kind: 'choice', Control: LiveResponseControl, notice: true },
   { id: 'latencyOffset', icon: Timer, kind: 'choice', Control: LatencyOffsetControl, Glance: LatencyOffsetGlance },
@@ -448,5 +656,6 @@ export const MIDI_DEFS: SettingDef[] = [
   { id: 'pedalsControls', icon: Footprints, kind: 'choice', Control: PedalsControl, Extra: PedalsExtra },
   { id: 'delayCheck', icon: Stethoscope, kind: 'choice', Control: DelayCheckControl, Extra: DelayCheckExtra },
   { id: 'midiTools', icon: Wrench, kind: 'choice', Control: ToolsControl },
+  { id: 'keyLights', icon: Lightbulb, kind: 'switch', Control: KeyLightsSwitch, Extra: KeyLightsExtra },
 ]
 

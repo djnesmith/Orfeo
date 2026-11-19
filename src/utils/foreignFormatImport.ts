@@ -1,3 +1,4 @@
+import { t } from './i18n'
 // ── Foreign Format Import ─────────────────────────────────────────────────
 // Converts MusicXML, Guitar Pro, and Capella files to Standard MIDI File
 // bytes using alphaTab's importer + midi namespaces only (no renderer, no
@@ -24,6 +25,87 @@ export function detectForeignFormat(filePath: string): ForeignFormat | null {
   return null; // .mid, .midi, .kar — no conversion needed
 }
 
+// ── GM program ranges that feed Orfeo's hand-assignment pool (mirrors
+// GM_GROUPS.piano/organ in gmInstruments.ts and HAND_ASSIGN_GROUPS in
+// keyboardGroups.ts) — kept as plain ranges here since this runs against
+// alphaTab's own Score model, before any Orfeo track object exists.
+const HAND_ASSIGN_PROGRAM_RANGES: [number, number][] = [
+  [0, 7],   // piano
+  [16, 23], // organ
+];
+
+function isHandAssignProgram(program: number): boolean {
+  return HAND_ASSIGN_PROGRAM_RANGES.some(([lo, hi]) => program >= lo && program <= hi);
+}
+
+// ── Split a multi-staff keyboard track (piano/organ grand staff) into one
+// MIDI track per staff, all staying on the track's one original channel —
+// mirrors the convention notation software (MuseScore, Finale, …) uses for
+// its own native MIDI export: a piano's grand staff always comes out as two
+// separate tracks sharing one channel (one instrument, one channel), never
+// merged into a single track. (The MultiTrack format set below this
+// function's caller is what lets same-channel tracks actually stay separate
+// once written to bytes — see the comment there.)
+//
+// Without this, alphaTab's MidiFileGenerator keeps every staff of a Track on
+// that Track's single shared channel AND in the same track — `playbackInfo`
+// (program, channel) and `staves` both live once per Track in alphaTab's
+// data model — so a grand-staff piano's treble and bass notes land in one
+// indistinguishable stream. Orfeo's hand-assignment engine
+// (handAssignment.ts, findStavePairs()) specifically looks for two tracks
+// that share one channel (or matching RH/LH names) and trusts them as a
+// piano's two staves outright — upper = right hand, lower = left, never
+// second-guessed — the same convention every notation software's own MIDI
+// export already follows. alphaTab never writes a track-name meta event
+// (confirmed: IMidiFileHandler has no such method), so the name-based rules
+// can never fire for a converted file — the shared channel is the only
+// signal available, which is exactly why it has to survive serialisation.
+// Restoring that split here, before generation, lets an imported
+// MusicXML/Guitar Pro/Capella file get the same reliable result a native
+// MIDI export already gets, instead of falling through to the generic
+// per-track dividing-line guess — which has no idea which staff the
+// original engraving used and disagrees with real hand crossings and
+// cross-staff voicing far too often. Scoped to piano/organ programs only
+// (same pool `midiParser.ts` hands to the hand-assignment engine) so an
+// unrelated multi-staff instrument (e.g. a harp) isn't restructured for no
+// benefit.
+function splitMultiStaffKeyboardTracks(score: any, at: any): void {
+  const newTracks: any[] = [];
+  for (const track of score.tracks) {
+    const info = track.playbackInfo;
+    if (track.staves.length <= 1 || track.isPercussion || !isHandAssignProgram(info.program)) {
+      newTracks.push(track);
+      continue;
+    }
+
+    for (const staff of track.staves) {
+      const nt = new at.model.Track();
+      nt.name = track.name;
+      nt.shortName = track.shortName;
+      nt.color = track.color;
+      nt.score = track.score;
+      nt.playbackInfo.volume = info.volume;
+      nt.playbackInfo.balance = info.balance;
+      nt.playbackInfo.port = info.port;
+      nt.playbackInfo.program = info.program;
+      nt.playbackInfo.bank = info.bank;
+      nt.playbackInfo.isMute = info.isMute;
+      nt.playbackInfo.isSolo = info.isSolo;
+      // Same channel as the original, undivided track — findStavePairs()
+      // pairs two keyboard tracks on one shared channel as one instrument's
+      // staves; a channel of its own would hide this pair from it entirely.
+      nt.playbackInfo.primaryChannel = info.primaryChannel;
+      nt.playbackInfo.secondaryChannel = info.secondaryChannel;
+      staff.index = 0;
+      staff.track = nt;
+      nt.staves = [staff];
+      newTracks.push(nt);
+    }
+  }
+  newTracks.forEach((t, i) => { t.index = i; });
+  score.tracks = newTracks;
+}
+
 // ── Convert foreign bytes → Standard MIDI File ArrayBuffer ───────────────
 // Throws a descriptive Error on failure (caller is responsible for the
 // user-facing error toast).
@@ -45,11 +127,24 @@ export async function convertForeignFileToMidiBuffer(
     score = (at as any).importer.ScoreLoader.loadScoreFromBytes(bytes, settings);
   } catch (e: any) {
     throw new Error(
-      `Couldn't read this ${FORMAT_LABEL[format]} file — it may be corrupted or use an unsupported feature. (${e?.message ?? e})`
+      t`Couldn't read this ${FORMAT_LABEL[format]} file — it may be corrupted or use an unsupported feature. (${e?.message ?? e})`
     );
   }
 
+  splitMultiStaffKeyboardTracks(score, at);
+
   const midiFile = new (at as any).midi.MidiFile();
+  // alphaTab defaults to SMF Type 0 (one physical track, channels
+  // multiplexed together) — confirmed by inspecting its generated output
+  // directly: with the default format, two tracks sharing one channel (the
+  // split above) collapse back into a single indistinguishable stream on
+  // write, since a Type 0 file has nowhere to keep them apart. Type 1 keeps
+  // every track as its own chunk regardless of shared channels, which is
+  // what splitMultiStaffKeyboardTracks()'s split actually needs to survive
+  // serialisation — and it's a strictly more faithful read of the score
+  // either way (a multi-instrument Guitar Pro/Capella file keeps its real
+  // per-instrument tracks instead of being collapsed into one).
+  midiFile.format = (at as any).midi.MidiFileFormat.MultiTrack;
   const handler  = new (at as any).midi.AlphaSynthMidiFileHandler(midiFile);
   const gen      = new (at as any).midi.MidiFileGenerator(score, settings, handler);
   gen.generate();
@@ -73,7 +168,7 @@ export async function convertForeignFileToMidiBuffer(
 
   if (!bytes_out || bytes_out.length === 0) {
     throw new Error(
-      `alphaTab produced an empty MIDI output for this ${FORMAT_LABEL[format]} file.`
+      t`alphaTab produced an empty MIDI output for this ${FORMAT_LABEL[format]} file.`
     );
   }
 
@@ -179,9 +274,9 @@ export async function resolveAndTrackImport(
 
   const cachePath = getCachePath(filePath, libraryFolder);
   const choice = await confirmDialog({
-    message: `Save "${fileName}" as a MIDI file?`,
-    detail: `This saves a copy at:\n${cachePath}\n\nThe original ${fileName} is never modified. You can save it later too — via the Library refresh icon.`,
-    buttons: ['Save as MID', "Don't Save"],
+    message: t`Save "${fileName}" as a MIDI file?`,
+    detail: t`This saves a copy at:\n${cachePath}\n\nThe original ${fileName} is never modified. You can save it later too — via the Library refresh icon.`,
+    buttons: [t`Save as MID`, t`Don't Save`],
   });
   if (choice === 0) {
     await (window.electronAPI as any).writeCachedImport(cachePath, resolved.base64);
@@ -215,9 +310,9 @@ export async function confirmPendingImportBeforeSwitch(
   const cachePath = getCachePath(pendingImportedFile.sourcePath, libraryFolder);
 
   const choice = await confirmDialog({
-    message: `Save imported file "${pendingImportedFile.fileName}" as a MIDI file?`,
-    detail: `This saves a copy at:\n${cachePath}\n\nThe original ${pendingImportedFile.fileName} is never modified.`,
-    buttons: ['Save as MID', "Don't Save", 'Cancel'],
+    message: t`Save imported file "${pendingImportedFile.fileName}" as a MIDI file?`,
+    detail: t`This saves a copy at:\n${cachePath}\n\nThe original ${pendingImportedFile.fileName} is never modified.`,
+    buttons: [t`Save as MID`, t`Don't Save`, t`Cancel`],
   });
 
   if (choice === 2) return false; // Cancel
@@ -250,9 +345,9 @@ export async function confirmPendingImportBeforeEdit(): Promise<boolean> {
   const cachePath = getCachePath(pendingImportedFile.sourcePath, libraryFolder);
 
   const choice = await confirmDialog({
-    message: `Save "${pendingImportedFile.fileName}" as a MIDI file before editing?`,
-    detail: `Orfeo's editing tools only work on real .mid files. This saves a copy at:\n${cachePath}\n\nThe original ${pendingImportedFile.fileName} is never modified.`,
-    buttons: ['Save as MID', 'Cancel'],
+    message: t`Save "${pendingImportedFile.fileName}" as a MIDI file before editing?`,
+    detail: t`Orfeo's editing tools only work on real .mid files. This saves a copy at:\n${cachePath}\n\nThe original ${pendingImportedFile.fileName} is never modified.`,
+    buttons: [t`Save as MID`, t`Cancel`],
   });
 
   if (choice !== 0) return false; // Cancel

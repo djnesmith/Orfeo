@@ -4,13 +4,14 @@ import { SurfaceContext } from './controls'
 import { richText } from './SettingCard'
 
 const always = () => true
-const nameStyle = {
+// a setting's name in Setup (SOUND ENGINE…); also the practice queue's heading
+export const nameStyle = {
   fontSize: 'var(--text-xs)', color: 'var(--text-default)', fontWeight: 500,
   letterSpacing: '0.02em', textTransform: 'uppercase' as const,
 }
 const summaryStyle = {
   fontSize: 'var(--text-xs)', color: 'var(--text-faint)', lineHeight: 1.5,
-  fontFamily: 'var(--font-ui)', fontStyle: 'italic' as const, marginTop: 3,
+  fontFamily: 'var(--font-ui)', fontStyle: 'italic' as const, marginTop: 3, whiteSpace: 'pre-line' as const,
 }
 
 // ── One Setup row (the drawer): name + its one-line summary underneath, then
@@ -25,8 +26,9 @@ export function QuickRow({ id }: { id: SettingId }) {
   const summary = <div style={summaryStyle}>{richText(info.summary)}{SummaryEnd && <> <SummaryEnd /></>}</div>
   return (
     <SurfaceContext.Provider value="setup">
-      <div style={{ padding: '9px 14px', borderBottom: '1px solid var(--border-row)' }}>
-        {def.layout === 'controlFirst' ? (
+      <div data-tour={`setting-${id}`} style={{ padding: '9px 14px', borderBottom: '1px solid var(--border-row)' }}>
+        {/* the window's columns layout reads as control-first in Setup */}
+        {def.layout === 'controlFirst' || def.layout === 'columns' ? (
           <>
             <div style={{ marginBottom: 7 }}>{name}</div>
             <Control />

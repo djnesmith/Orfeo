@@ -1,9 +1,10 @@
 import React, { useMemo, useCallback, useState, useEffect, useRef } from 'react'
 import { useStore } from '../../store'
 import { isBlackKey } from '../../utils/midiParser'
-import { getNoteLabel, getNoteName } from '../../utils/noteNames'
+import { getNoteLabel, getNoteName, noteLabelText, resolveSa } from '../../utils/noteNames'
 import { detectChord, detectChordWithInversion, inversionForKnownChord, formatInversionDisplay, localizeChord, ordinalSuffix, buildCompactVoicing } from '../../utils/chordDetection'
-import { buildKeyLayoutRatios, PIANO_RANGES as RANGES } from '../../utils/keyLayout'
+import { buildKeyLayoutView } from '../../utils/keyLayout'
+import { startKeyView, targetRange, foldRange, foldIntoRange, keyHeightFor, labelScaleFor } from '../../utils/keyView'
 import { notesSoundingAt } from '../../utils/midiParser'
 import type { SoundingNote } from '../../utils/midiParser'
 import { buildPitchHandIndex, lookupNoteHandAtTime, detectPerformanceBoundary } from '../../utils/handBoundaries'
@@ -13,6 +14,7 @@ import Tooltip, { useTooltip } from '../Tooltip'
 import { ContextMenu, ContextMenuItem } from '../ContextMenu'
 import { outputLatencySec } from '../../audio/engine'
 import { isShown } from '../../utils/trackShown'
+import { t } from '../../utils/i18n'
 
 const HAND_LH = 'var(--hand-lh)'
 const HAND_RH = 'var(--hand-rh)'
@@ -43,10 +45,18 @@ function resolveCurrentIndex(seq: { displayTime: number }[], currentTime: number
 
 export default function Keyboard() {
   const keyboardSize = useStore((s) => s.keyboardSize)
+  const keyboardOctave = useStore((s) => s.keyboardOctave)
+  // what is drawn right now — glides between sizes (utils/keyView.ts)
+  const keyView = useStore((s) => s.keyView)
+  const keyViewLo = useStore((s) => s.keyViewLo)
+  const keyViewHi = useStore((s) => s.keyViewHi)
+  useEffect(() => { startKeyView() }, [])
   const activeKeys = useStore((s) => s.activeKeys)
   const activeKeyColors = useStore((s) => s.activeKeyColors)
   const noteNaming              = useStore((s) => s.noteNaming)
   const accidentals             = useStore((s) => s.accidentals)
+  const sargamSa                = useStore((s) => resolveSa(s.sargam.sa, s.detectedKey))
+  const sargamScript            = useStore((s) => s.sargam.script)
   const chordNamingStyle        = useStore((s) => s.chordNamingStyle)
   const showOctaveLabels        = useStore((s) => s.showOctaveLabels)
   const showNoteNamesOnKeyboard = useStore((s) => s.showNoteNamesOnKeyboard)
@@ -322,7 +332,7 @@ export default function Keyboard() {
     // keyboard" on the rare beat where nothing is actually ringing from any
     // lit track. Keeps the real bass note so slash chords still read right
     // (Baug/G → G lowest). ─────────────────────────────────────────────────
-    const compact = buildCompactVoicing(structured.rootPitchClass, structured.intervals, bassPc, keyboardSize)
+    const compact = buildCompactVoicing(structured.rootPitchClass, structured.intervals, bassPc, targetRange({ keyboardSize, keyboardOctave }))
     // "Show on keyboard" gets the REAL voicing — exact register, exact
     // inversion, exact doublings, matching the piano roll — not a rebuilt
     // one. Falls back to the compact shape only if nothing real is available.
@@ -334,7 +344,7 @@ export default function Keyboard() {
     // directly over the chord name it was triggered from. Nudged right and
     // up so the name stays visible underneath instead of getting covered. ──
     setChordCtxMenu({ x: e.clientX + 24, y: e.clientY - 78, structured, realMidi, explorerMidi, displayName, inversionCount })
-  }, [playbackState, heldChordEvent, noteNaming, accidentals, chordNamingStyle, keyboardSize])
+  }, [playbackState, heldChordEvent, noteNaming, accidentals, chordNamingStyle, keyboardSize, keyboardOctave])
 
   const handleShowChordOnKeyboard = useCallback(() => {
     if (!chordCtxMenu) return
@@ -342,9 +352,13 @@ export default function Keyboard() {
     if (chordExplorerOpen || scaleExplorerOpen) { setChordCtxMenu(null); return }
     const { realMidi, displayName, inversionCount } = chordCtxMenu
     // ── The real voicing from the file (built in handleChordContextMenu).
-    // Clamp to the current keyboard's playable range as a safety net. ──────
-    const { min, max } = RANGES[keyboardSize] ?? RANGES[73]
-    const midiNotes = realMidi.filter(m => m >= min && m <= max)
+    // Clamp to the current keyboard's playable range as a safety net; a
+    // portable keyboard moves the outside notes onto it by octaves instead. ──
+    const { min, max } = targetRange({ keyboardSize, keyboardOctave })
+    const fold = foldRange({ keyboardSize, keyboardOctave })
+    const midiNotes = fold
+      ? [...new Set(realMidi.map(m => foldIntoRange(m, min, max)))]
+      : realMidi.filter(m => m >= min && m <= max)
     if (midiNotes.length > 0) {
       // ── Lock-a-chord is a single detached chord being studied while
       // paused, not song playback — a tool, so amber (--lock-chord-color),
@@ -363,7 +377,7 @@ export default function Keyboard() {
       useStore.getState().setLockedChordNoteCount(new Set(midiNotes.map(m => m % 12)).size)
     }
     setChordCtxMenu(null)
-  }, [chordCtxMenu, keyboardSize, setLockedKeysStore, chordExplorerOpen, scaleExplorerOpen])
+  }, [chordCtxMenu, keyboardSize, keyboardOctave, setLockedKeysStore, chordExplorerOpen, scaleExplorerOpen])
 
   const handleOpenChordInExplorer = useCallback(() => {
     if (!chordCtxMenu) return
@@ -384,7 +398,7 @@ export default function Keyboard() {
   // usage below), not on the empty "— — —" placeholder. ─────────────────────
   const showChordTooltip = playbackState === 'playing' ? !!heldChordEvent : !!heldChordEvent?.structured
   const chordTooltip = useTooltip<HTMLDivElement>(
-    { title: playbackState === 'playing' ? 'Pause to study the chord' : 'Right-click to see the chord' },
+    { title: playbackState === 'playing' ? t`Pause to study the chord` : t`Right-click to see the chord` },
     { oneLine: true },
   )
 
@@ -430,7 +444,9 @@ export default function Keyboard() {
     return () => window.removeEventListener('mouseup', up)
   }, [])
 
-  const { min, max } = RANGES[keyboardSize]
+  // ── The keys drawn: keyViewLo..keyViewHi (during a size glide, both the old
+  // and the new keyboard's keys, sliding in and out at the edges) ──────────
+  const min = keyViewLo, max = keyViewHi
   const keys = useMemo(() => {
     const list: { midi: number; isBlack: boolean }[] = []
     for (let m = min; m <= max; m++) list.push({ midi: m, isBlack: isBlackKey(m) })
@@ -438,18 +454,39 @@ export default function Keyboard() {
   }, [min, max])
   const whiteKeys = keys.filter(k => !k.isBlack)
 
-  // ── Key layout ratios — same formula as PianoRoll and NoteEditorCanvas ────────
-  // buildKeyLayoutRatios is the single canonical source; multiplying by 100 gives
-  // the CSS percentages that position black keys absolutely over the white key flex row.
-  const keyRatios = useMemo(() => buildKeyLayoutRatios(min, max), [min, max])
+  // ── Key layout — same formula as the piano roll (utils/keyLayout.ts),
+  // through the same view, so keys and lanes always line up, mid-glide too.
+  const keyRatios = useMemo(() => buildKeyLayoutView(keyView, min, max), [keyView, min, max])
+  const labelScale = labelScaleFor(keyView)
 
-  const allActiveKeys = useMemo(() => {
+  // ── Portable keyboards: a note past the edges lights the key with the same
+  // name an octave (or more) in, fainter — so all of the music still shows ──
+  const fold = useMemo(() => foldRange({ keyboardSize, keyboardOctave }), [keyboardSize, keyboardOctave])
+
+  const allActiveKeysRaw = useMemo(() => {
     const merged = new Set(activeKeys)
     lockedKeys.forEach(k => merged.add(k))
     explorerKeys.forEach(k => merged.add(k))
     reflectKeys.forEach(k => merged.add(k))
     return merged
   }, [activeKeys, lockedKeys, explorerKeys, reflectKeys])
+  // folded key → the note it stands for (only keys not lit by a note of their own)
+  const foldedFrom = useMemo(() => {
+    const m = new Map<number, number>()
+    if (!fold) return m
+    allActiveKeysRaw.forEach(k => {
+      if (k >= fold.min && k <= fold.max) return
+      const f = foldIntoRange(k, fold.min, fold.max)
+      if (!allActiveKeysRaw.has(f) && !m.has(f)) m.set(f, k)
+    })
+    return m
+  }, [allActiveKeysRaw, fold])
+  const allActiveKeys = useMemo(() => {
+    if (foldedFrom.size === 0) return allActiveKeysRaw
+    const merged = new Set(allActiveKeysRaw)
+    foldedFrom.forEach((_from, k) => merged.add(k))
+    return merged
+  }, [allActiveKeysRaw, foldedFrom])
 
   // "Reflect on keyboard" — the paused song's notes in their own track (or
   // left/right hand) colours, exactly as playback lights them: amber belongs
@@ -482,6 +519,12 @@ export default function Keyboard() {
 
   const getColor = (midi: number): string | null => {
     if (!allActiveKeys.has(midi)) return null
+    const from = foldedFrom.get(midi)
+    if (from !== undefined) {
+      // fainter: the note's own colour, mixed half-way into the key
+      const c = allActiveColors.get(from) ?? 'var(--text-amber)'
+      return `color-mix(in srgb, ${c} 50%, ${isBlackKey(midi) ? 'var(--border-row)' : 'var(--key-white-bg)'})`
+    }
     return allActiveColors.get(midi) ?? 'var(--text-amber)'
   }
 
@@ -595,24 +638,28 @@ export default function Keyboard() {
   const keyContainerRef = useRef<HTMLDivElement>(null)
   const [keyHeight, setKeyHeight] = useState(130)
 
+  // Proportional to key width — ratio 4.0 gives natural-looking keys on screen
+  // (real piano is 1:6.4 but that's too tall for a UI element). 80–140 px for
+  // 61/73/88 keys; a portable keyboard's wider keys may grow taller, smoothly
+  // with the view as it glides (keyHeightFor, utils/keyView.ts).
+  const keyViewRef = useRef(keyView)
+  keyViewRef.current = keyView
+  const updateKeyHeight = useCallback(() => {
+    const el = keyContainerRef.current
+    const w = el?.clientWidth
+    if (!w) return
+    setKeyHeight(keyHeightFor(w, keyViewRef.current, window.innerHeight))
+  }, [])
   useEffect(() => {
     const el = keyContainerRef.current
     if (!el) return
-    const update = () => {
-      const w = el.clientWidth
-      if (!w) return
-      // Proportional to key width — ratio 4.0 gives natural-looking keys on screen
-      // (real piano is 1:6.4 but that's too tall for a UI element)
-      // Hard cap: min 80px, max 140px
-      const whiteW = w / whiteKeys.length
-      const h = Math.round(Math.max(80, Math.min(140, whiteW * 4.0)))
-      setKeyHeight(h)
-    }
-    update()
-    const ro = new ResizeObserver(update)
+    updateKeyHeight()
+    const ro = new ResizeObserver(updateKeyHeight)
     ro.observe(el)
-    return () => ro.disconnect()
-  }, [whiteKeys.length])
+    window.addEventListener('resize', updateKeyHeight)
+    return () => { ro.disconnect(); window.removeEventListener('resize', updateKeyHeight) }
+  }, [updateKeyHeight])
+  useEffect(() => { updateKeyHeight() }, [keyView, updateKeyHeight])
 
   // ── Live keyboard top-edge tracking (Phase 1: hidable playbar) ─────────────
   // Only runs while the playbar is actually hidden — zero overhead (no rAF
@@ -664,20 +711,21 @@ export default function Keyboard() {
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 'var(--space-2)', padding: '0 var(--space-3)', position: 'relative' }}>
             {/* ── Left: CHORDS trigger + prompter toggle ────────────────────────── */}
             <div style={{ position: 'absolute', left: 10, display: 'flex', alignItems: 'center', gap: 5 }}>
-              <Tooltip title="Chords Explorer" description="Opens a dedicated view for browsing and detecting chords across the full keyboard.">
+              <Tooltip title={t`Chords Explorer`} description={t`Opens a dedicated view for browsing and detecting chords across the full keyboard.`}>
                 <span
+                  data-tour="explorer-chords"
                   onClick={() => setChordExplorerOpen(true)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={activateOnKey(() => setChordExplorerOpen(true))}
                   style={{ fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 700, color: 'var(--text-amber)', letterSpacing: '0.12em', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}
                 >
-                  Chords
+                  {t`Chords`}
                 </span>
               </Tooltip>
               {/* ── Prompter toggle — amber when open, dim when closed, faded when no file ─ */}
               {chordPrompterEnabled && (
-                <Tooltip title="Chord Prompter" description="Shows a scrolling past → current → next chord sequence alongside the chord name, synced to playback.">
+                <Tooltip title={t`Chord Prompter`} description={t`Shows a scrolling past → current → next chord sequence alongside the chord name, synced to playback.`}>
                   <div
                     onClick={() => midi && setChordPrompterOpen(!chordPrompterOpen)}
                     role="button"
@@ -694,6 +742,7 @@ export default function Keyboard() {
 
             {/* Centre: chord name — priority: explorer > sequence > manual > empty */}
             <div
+              data-tour="chord-name"
               onContextMenu={handleChordContextMenu}
               ref={showChordTooltip && !explorerDisplay ? chordTooltip.ref : undefined}
               onMouseEnter={showChordTooltip && !explorerDisplay ? chordTooltip.onMouseEnter : undefined}
@@ -711,7 +760,7 @@ export default function Keyboard() {
                     <span style={{ fontFamily: 'var(--font-ui)', fontSize: 10, color: 'var(--text-default)', userSelect: 'none' }}>
                       {explorerDisplay.ordinal}
                       <span style={{ fontSize: 7, verticalAlign: 'super' }}>{ordinalSuffix(Number(explorerDisplay.ordinal))}</span>
-                      {' inv'}
+                      {' '}{t`inv`}
                     </span>
                   )}
                 </>
@@ -750,15 +799,16 @@ export default function Keyboard() {
 
             {/* ── Right: SCALES trigger ─────────────────────────────────────────── */}
             <div style={{ position: 'absolute', right: 10, display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-              <Tooltip title="Scales Explorer" description="Opens a dedicated view for exploring scales and highlighting their notes on the keyboard.">
+              <Tooltip title={t`Scales Explorer`} description={t`Opens a dedicated view for exploring scales and highlighting their notes on the keyboard.`}>
                 <span
+                  data-tour="explorer-scales"
                   onClick={() => setScaleExplorerOpen(true)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={activateOnKey(() => setScaleExplorerOpen(true))}
                   style={{ fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 700, color: 'var(--text-amber)', letterSpacing: '0.12em', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}
                 >
-                  Scales
+                  {t`Scales`}
                 </span>
               </Tooltip>
             </div>
@@ -771,19 +821,20 @@ export default function Keyboard() {
 
             {/* ── Left: CHORDS trigger + prompter toggle ────────────────────── */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-              <Tooltip title="Chords" description="Opens a dedicated view for browsing and detecting chords across the full keyboard.">
+              <Tooltip title={t`Chords`} description={t`Opens a dedicated view for browsing and detecting chords across the full keyboard.`}>
                 <span
+                  data-tour="explorer-chords"
                   onClick={() => setChordExplorerOpen(true)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={activateOnKey(() => setChordExplorerOpen(true))}
                   style={{ fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 700, color: 'var(--text-amber)', letterSpacing: '0.12em', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}
                 >
-                  Chords
+                  {t`Chords`}
                 </span>
               </Tooltip>
               {/* ── Prompter toggle (amber — always active while open) ────────── */}
-              <Tooltip title="Chord Prompter" description="Shows a scrolling past → current → next chord sequence alongside the chord name, synced to playback.">
+              <Tooltip title={t`Chord Prompter`} description={t`Shows a scrolling past → current → next chord sequence alongside the chord name, synced to playback.`}>
                 <div
                   onClick={() => setChordPrompterOpen(!chordPrompterOpen)}
                   role="button"
@@ -808,7 +859,7 @@ export default function Keyboard() {
                   return (
                     <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontFamily: 'var(--font-ui)' }}>
-                        {noFile ? 'Open a MIDI file' : noChords ? 'No chords detected' : 'Press play'}
+                        {noFile ? t`Open a MIDI file` : noChords ? t`No chords detected` : t`Press play`}
                       </span>
                     </div>
                   )
@@ -919,15 +970,16 @@ export default function Keyboard() {
 
             {/* ── Right: SCALES trigger ─────────────────────────────────────────── */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexShrink: 0 }}>
-              <Tooltip title="Scales" description="Opens a dedicated view for exploring scales and highlighting their notes on the keyboard.">
+              <Tooltip title={t`Scales`} description={t`Opens a dedicated view for exploring scales and highlighting their notes on the keyboard.`}>
                 <span
+                  data-tour="explorer-scales"
                   onClick={() => setScaleExplorerOpen(true)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={activateOnKey(() => setScaleExplorerOpen(true))}
                   style={{ fontFamily: 'var(--font-ui)', fontSize: 12, fontWeight: 700, color: 'var(--text-amber)', letterSpacing: '0.12em', textTransform: 'uppercase', cursor: 'pointer', userSelect: 'none' }}
                 >
-                  Scales
+                  {t`Scales`}
                 </span>
               </Tooltip>
             </div>
@@ -939,20 +991,23 @@ export default function Keyboard() {
       <div
         ref={keyContainerRef}
         style={{
-          position: 'relative', width: '100%', userSelect: 'none',
+          position: 'relative', width: '100%', userSelect: 'none', overflow: 'hidden',
           height: keyHeight, background: 'var(--bg-deep)', borderTop: '1px solid var(--state-hover-bg)', transition: 'height 0.15s',
         }}
       >
-        {/* White keys */}
-        <div style={{ position: 'absolute', inset: 0, display: 'flex' }}>
+        {/* White keys — placed by the shared key layout (not a flex row), so
+            they glide with the piano roll's lanes when the size changes */}
+        <div style={{ position: 'absolute', inset: 0 }}>
           {whiteKeys.map((k, i) => {
+            const ratio = keyRatios[k.midi - min]
+            if (!ratio || ratio.x >= 1 || ratio.x + ratio.width <= 0) return null
             const color = getColor(k.midi)
             const hand = getHardwareHand(k.midi)
             const colorHand = showHandLetters ? getColorHand(color) : null
             const locked = lockedKeys.has(k.midi)
             const isC = k.midi % 12 === 0
             const label = color
-              ? (showNoteNamesOnKeyboard ? (getNoteName(k.midi, noteNaming, accidentals) || null) : null)
+              ? (showNoteNamesOnKeyboard ? (noteLabelText(k.midi, noteNaming, accidentals, { sa: sargamSa, script: sargamScript }) || null) : null)
               : (isC && showOctaveLabels ? getNoteLabel(k.midi, noteNaming, accidentals) : null)
             return (
               <div
@@ -972,12 +1027,13 @@ export default function Keyboard() {
                 onMouseEnter={() => { if (isMouseDown.current) handleKeyClick(k.midi, true) }}
                 tabIndex={0}
                 role="button"
-                aria-label={`Play ${getNoteLabel(k.midi, noteNaming, accidentals) || 'note'}`}
+                aria-label={t`Play ${getNoteLabel(k.midi, noteNaming, accidentals) || 'note'}`}
                 onKeyDown={e => {
                   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleKeyClick(k.midi) }
                 }}
                 style={{
-                  position: 'relative', flex: '1 1 0%', display: 'flex', flexDirection: 'column',
+                  position: 'absolute', top: 0, bottom: 0, left: `${ratio.x * 100}%`, width: `${ratio.width * 100}%`,
+                  boxSizing: 'border-box', display: 'flex', flexDirection: 'column',
                   justifyContent: 'flex-end', alignItems: 'center', paddingBottom: 4, cursor: 'pointer',
                   background: color ?? 'var(--key-white-bg)',
                   borderRight: !color ? '1px solid var(--key-white-border)' : allActiveKeys.has(whiteKeys[i + 1]?.midi) ? '1px solid var(--key-active-border)' : '1px solid transparent',
@@ -1009,11 +1065,11 @@ export default function Keyboard() {
                 {colorHand && (
                   <span style={{
                     position: 'absolute', top: '68%', left: '50%', transform: 'translateX(-50%)',
-                    width: 'clamp(8px, 42%, 13px)', height: 'clamp(8px, 42%, 13px)',
+                    width: `clamp(8px, 42%, ${Math.round(13 * labelScale)}px)`, height: `clamp(8px, 42%, ${Math.round(13 * labelScale)}px)`,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     borderRadius: 2, background: 'var(--text-near-black)',
                     boxShadow: '0 1px 2px rgba(0,0,0,0.4)',
-                    fontSize: 8, fontWeight: 700, lineHeight: 1,
+                    fontSize: Math.round(8 * labelScale), fontWeight: 700, lineHeight: 1,
                     fontFamily: 'var(--font-mono)', color: 'var(--text-white)',
                     userSelect: 'none', pointerEvents: 'none',
                   }}>
@@ -1022,7 +1078,7 @@ export default function Keyboard() {
                 )}
                 {label && (
                   <span
-                    style={{ fontWeight: 600, pointerEvents: 'none', color: color ? 'var(--text-white)' : 'var(--key-label-dim)', fontFamily: 'var(--font-mono)', fontSize: (chordExplorerOpen || scaleExplorerOpen) ? 11 : 9 }}>
+                    style={{ fontWeight: 600, pointerEvents: 'none', color: color ? 'var(--text-white)' : 'var(--key-label-dim)', fontFamily: 'var(--font-mono)', fontSize: Math.round(((chordExplorerOpen || scaleExplorerOpen) ? 11 : 9) * labelScale) }}>
                     {label}
                   </span>
                 )}
@@ -1036,7 +1092,7 @@ export default function Keyboard() {
           {keys.filter(k => k.isBlack).map((k) => {
             // ── Positions come from the same buildKeyLayoutRatios as PianoRoll ──
             const ratio = keyRatios[k.midi - min]
-            if (!ratio) return null
+            if (!ratio || ratio.x >= 1 || ratio.x + ratio.width <= 0) return null
             const leftPct  = ratio.x * 100
             const widthPct = ratio.width * 100
             const color = getColor(k.midi)
@@ -1061,7 +1117,7 @@ export default function Keyboard() {
                 onMouseEnter={() => { if (isMouseDown.current) handleKeyClick(k.midi, true) }}
                 tabIndex={0}
                 role="button"
-                aria-label={`Play ${getNoteLabel(k.midi, noteNaming, accidentals) || 'note'}`}
+                aria-label={t`Play ${getNoteLabel(k.midi, noteNaming, accidentals) || 'note'}`}
                 onKeyDown={e => {
                   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleKeyClick(k.midi) }
                 }}
@@ -1103,11 +1159,11 @@ export default function Keyboard() {
                 {colorHand && (
                   <span style={{
                     position: 'absolute', top: 2, left: '50%', transform: 'translateX(-50%)',
-                    width: 'clamp(7px, 70%, 11px)', height: 'clamp(7px, 70%, 11px)',
+                    width: `clamp(7px, 70%, ${Math.round(11 * labelScale)}px)`, height: `clamp(7px, 70%, ${Math.round(11 * labelScale)}px)`,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     borderRadius: 2, background: 'var(--text-white)',
                     boxShadow: '0 1px 2px rgba(0,0,0,0.4)',
-                    fontSize: 7, fontWeight: 700, lineHeight: 1,
+                    fontSize: Math.round(7 * labelScale), fontWeight: 700, lineHeight: 1,
                     fontFamily: 'var(--font-mono)', color: 'var(--text-near-black)',
                     userSelect: 'none', pointerEvents: 'none',
                   }}>
@@ -1118,11 +1174,11 @@ export default function Keyboard() {
                   <span style={{
                     position: 'absolute', bottom: 3, left: '50%',
                     transform: 'translateX(-50%)',
-                    fontSize: (chordExplorerOpen || scaleExplorerOpen) ? 8 : 7, fontFamily: 'var(--font-mono)', fontWeight: 700,
+                    fontSize: Math.round(((chordExplorerOpen || scaleExplorerOpen) ? 8 : 7) * labelScale), fontFamily: 'var(--font-mono)', fontWeight: 700,
                     color: 'var(--key-note-name-color)', pointerEvents: 'none',
                     whiteSpace: 'nowrap', textShadow: '0 1px 2px rgba(0,0,0,0.95)',
                   }}>
-                    {getNoteName(k.midi, noteNaming, accidentals)}
+                    {noteLabelText(k.midi, noteNaming, accidentals, { sa: sargamSa, script: sargamScript })}
                   </span>
                 )}
               </div>
@@ -1132,12 +1188,12 @@ export default function Keyboard() {
       </div>
 
       {chordCtxMenu && (
-        <ContextMenu ref={chordCtxMenuRef} x={chordCtxMenu.x} y={chordCtxMenu.y} minWidth={190} ariaLabel="Chord actions">
+        <ContextMenu ref={chordCtxMenuRef} x={chordCtxMenu.x} y={chordCtxMenu.y} minWidth={190} ariaLabel={t`Chord actions`}>
           <ContextMenuItem onClick={handleShowChordOnKeyboard}>
-            Show on keyboard
+            {t`Show on keyboard`}
           </ContextMenuItem>
           <ContextMenuItem onClick={handleOpenChordInExplorer}>
-            Open in Chord Explorer
+            {t`Open in Chord Explorer`}
           </ContextMenuItem>
         </ContextMenu>
       )}

@@ -2,7 +2,10 @@ import { Languages, Hash, Radar, ScanEye, Type, ToggleLeft, ToggleRight } from '
 import { useStore } from '../../../store'
 import { t } from '../../../utils/i18n'
 import type { NoteNaming } from '../../../types'
-import { OptionBtn, SettingsDropdown, EyeClosed, PreviewBox, GlanceLine, SubLabel } from '../controls'
+import { getSargamName, resolveSa } from '../../../utils/noteNames'
+import { useState } from 'react'
+import Tooltip from '../../Tooltip'
+import { OptionBtn, SettingsDropdown, EyeClosed, PreviewBox, GlanceLine, SubLabel, ButtonRow, useSurface } from '../controls'
 import type { SettingDef } from '../types'
 import { followNeedsPick } from '../followPick'
 
@@ -20,22 +23,41 @@ export function groupLabel(group: string): string {
 const NOTE_NAMING_OPTIONS: { value: NoteNaming; label: string }[] = [
   { value: 'english', label: 'UK/US' },
   { value: 'central-european', label: 'EU' },
-  { value: 'solfege', label: 'Solfège' },
+  { value: 'solfege', label: t`Solfège` },
+  { value: 'sargam', label: 'Sargam' },
 ]
 
 function DisplaySystemControl() {
   const noteNaming = useStore(s => s.noteNaming)
   const setNoteNaming = useStore(s => s.setNoteNaming)
   return (
-    <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+    <ButtonRow>
       {NOTE_NAMING_OPTIONS.map(opt => (
         <OptionBtn key={opt.value} active={noteNaming === opt.value} onClick={() => setNoteNaming(opt.value)}>{opt.label}</OptionBtn>
       ))}
-      {/* Hide — red when active (hidden is a meaningful state) */}
-      <OptionBtn active={noteNaming === 'hidden'} onClick={() => setNoteNaming('hidden')} activeColor="error">
-        <EyeClosed size={11} strokeWidth={1.5} />
-      </OptionBtn>
-    </div>
+    </ButtonRow>
+  )
+}
+// Hide the note names: a bare eye at the right of the name line, where switches
+// sit. Red while the names are hidden; a second click brings back the names
+// that were shown before.
+let lastShownNaming: NoteNaming = 'english'
+function HideNamesToggle() {
+  const noteNaming = useStore(s => s.noteNaming)
+  const [hover, setHover] = useState(false)
+  const hidden = noteNaming === 'hidden'
+  if (!hidden) lastShownNaming = noteNaming
+  const label = hidden ? t`Show note names` : t`Hide note names`
+  return (
+    <Tooltip title={label} oneLine>
+      <button aria-label={label} aria-pressed={hidden}
+        onClick={() => useStore.getState().setNoteNaming(hidden ? lastShownNaming : 'hidden')}
+        onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+        style={{ display: 'flex', alignItems: 'center', padding: 0, border: 'none', background: 'none', cursor: 'pointer',
+          color: hidden ? 'var(--status-error)' : hover ? 'var(--text-amber)' : 'var(--text-inactive)' }}>
+        <EyeClosed size={14} strokeWidth={1.5} />
+      </button>
+    </Tooltip>
   )
 }
 function DisplaySystemGlance() {
@@ -45,8 +67,36 @@ function DisplaySystemGlance() {
       {noteNaming === 'english'          && 'C  D  E  F  G  A  B'}
       {noteNaming === 'central-european' && 'C  D  E  F  G  A  H'}
       {noteNaming === 'solfege'          && 'Do Re Mi Fa Sol La Si'}
-      {noteNaming === 'hidden'           && '— labels hidden —'}
+      {noteNaming === 'sargam'           && <SargamPreview />}
+      {noteNaming === 'hidden'           && t`— labels hidden —`}
     </PreviewBox>
+  )
+}
+
+// Sargam: Sa follows the song's key, or sits where the player sets it; Latin or Devanagari.
+// Only single notes on the keyboard and piano roll take Sargam names; chords stay Western.
+const SA_NOTES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+function SargamPreview() {
+  const script = useStore(s => s.sargam.script)
+  return <>{Array.from({ length: 12 }, (_, i) => getSargamName(i, 0, script)).join('  ')}</>
+}
+function SargamExtra() {
+  const sargam = useStore(s => s.sargam)
+  const setSargam = useStore(s => s.setSargam)
+  const keySa = useStore(s => resolveSa('auto', s.detectedKey))
+  const saValue = sargam.sa === 'auto' ? 'auto' : String(sargam.sa)
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', alignItems: 'center', columnGap: 10, rowGap: 8, marginTop: 8 }}>
+      <SubLabel>{t`Sa`}</SubLabel>
+      <SettingsDropdown value={saValue}
+        options={[{ value: 'auto', label: t`Follow the song's key (${SA_NOTES[keySa]})` }, ...SA_NOTES.map((n, i) => ({ value: String(i), label: n }))]}
+        onChange={v => setSargam({ sa: v === 'auto' ? 'auto' : Number(v) })} />
+      <SubLabel>{t`Script`}</SubLabel>
+      <ButtonRow>
+        <OptionBtn active={sargam.script === 'latin'} onClick={() => setSargam({ script: 'latin' })}>Sa Re Ga</OptionBtn>
+        <OptionBtn active={sargam.script === 'devanagari'} onClick={() => setSargam({ script: 'devanagari' })}>सा रे ग</OptionBtn>
+      </ButtonRow>
+    </div>
   )
 }
 
@@ -57,9 +107,10 @@ function AccidentalsControl() {
     cursor: 'pointer', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-ui)', fontWeight: 600,
     color: active ? 'var(--text-amber)' : 'var(--text-inactive)',
   })
+  const surface = useSurface()
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
-      <span onClick={() => setAccidentals('flat')} style={side(accidentals === 'flat')}><span style={{ fontSize: 'calc(var(--text-xs) * 1.5)' }}>♭</span> Flats</span>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: surface === 'window' ? 'flex-start' : 'center', gap: 20 }}>
+      <span onClick={() => setAccidentals('flat')} style={side(accidentals === 'flat')}><span style={{ fontSize: 'calc(var(--text-xs) * 1.5)' }}>♭</span> {t`Flats`}</span>
       <button
         onClick={() => setAccidentals(accidentals === 'flat' ? 'sharp' : 'flat')}
         aria-label={t`Sharps or flats`}
@@ -67,13 +118,14 @@ function AccidentalsControl() {
       >
         {accidentals === 'flat' ? <ToggleLeft size={16} strokeWidth={1.5} /> : <ToggleRight size={16} strokeWidth={1.5} />}
       </button>
-      <span onClick={() => setAccidentals('sharp')} style={side(accidentals === 'sharp')}><span style={{ fontSize: 'calc(var(--text-xs) * 1.5)' }}>♯</span> Sharps</span>
+      <span onClick={() => setAccidentals('sharp')} style={side(accidentals === 'sharp')}><span style={{ fontSize: 'calc(var(--text-xs) * 1.5)' }}>♯</span> {t`Sharps`}</span>
     </div>
   )
 }
 function AccidentalsGlance() {
   const accidentals = useStore(s => s.accidentals)
-  return <GlanceLine center>{accidentals === 'flat' ? 'Bb  Eb  Ab  Db  Gb' : 'A#  D#  G#  C#  F#'}</GlanceLine>
+  const surface = useSurface()
+  return <GlanceLine center={surface === 'setup'}>{accidentals === 'flat' ? 'Bb  Eb  Ab  Db  Gb' : 'A#  D#  G#  C#  F#'}</GlanceLine>
 }
 
 function ChordTrackingControl() {
@@ -86,22 +138,21 @@ function ChordTrackingControl() {
     if (followNeedsPick(s)) s.openSettingsWindow('notation')
   }
   return (
-    <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
-      <OptionBtn active={mode === 'auto'} onClick={() => setMode('auto')}>Auto</OptionBtn>
-      <OptionBtn active={mode === 'harmony'} onClick={() => setMode('harmony')}>Harmony</OptionBtn>
-      <OptionBtn active={mode === 'follow'} onClick={chooseFollow}>Follow</OptionBtn>
-    </div>
+    <ButtonRow>
+      <OptionBtn active={mode === 'auto'} onClick={() => setMode('auto')}>{t`Auto`}</OptionBtn>
+      <OptionBtn active={mode === 'harmony'} onClick={() => setMode('harmony')}>{t`Harmony`}</OptionBtn>
+      <OptionBtn active={mode === 'follow'} onClick={chooseFollow}>{t`Follow`}</OptionBtn>
+    </ButtonRow>
   )
 }
 function ChordTrackingGlance() {
   const mode = useStore(s => s.chordTrackingMode)
-  return (
-    <GlanceLine>
-      {mode === 'auto' && 'Follows the chord instruments (piano, keys, guitar, strings), ignoring melody and ornament lines. Best for most songs.'}
-      {mode === 'harmony' && 'Every non-drum track pooled together, including melody. For dense textures where no one instrument holds the chords.'}
-      {mode === 'follow' && 'Scoped to one instrument or group you choose.'}
-    </GlanceLine>
-  )
+  // the second sentence starts a new line in the Settings window only; Setup keeps one paragraph
+  const surface = useSurface()
+  const text = mode === 'auto' ? t`Follows the chord instruments (piano, keys, guitar, strings), ignoring melody and ornament lines.\nBest for most songs.`
+    : mode === 'harmony' ? t`Every non-drum track pooled together, including melody.\nFor dense textures where no one instrument holds the chords.`
+      : t`Scoped to one instrument or group you choose.`
+  return <GlanceLine>{surface === 'setup' ? text.replace(/\n/g, ' ') : text}</GlanceLine>
 }
 function ChordTrackingExtra() {
   const mode = useStore(s => s.chordTrackingMode)
@@ -112,29 +163,37 @@ function ChordTrackingExtra() {
   const trackIndex = useStore(s => s.chordFollowTrackIndex)
   const setTrackIndex = useStore(s => s.setChordFollowTrackIndex)
   const tracks = useStore(s => s.tracks)
+  const surface = useSurface()
   if (mode !== 'follow') return null
+  // Settings window: By Group / By Track and the menu share one row; Setup stacks them
   return (
     <>
       <SubLabel>{t`Follow`}</SubLabel>
-      <div style={{ display: 'flex', gap: 'var(--space-1)', marginBottom: 6 }}>
-        <OptionBtn active={subMode === 'group'} onClick={() => setSubMode('group')}>By Group</OptionBtn>
-        <OptionBtn active={subMode === 'track'} onClick={() => setSubMode('track')}>By Track</OptionBtn>
+      <div style={surface === 'window'
+        ? { display: 'grid', gridTemplateColumns: 'auto minmax(0, 260px)', columnGap: 'var(--space-2)', alignItems: 'center' }
+        : undefined}>
+      <div style={{ marginBottom: surface === 'window' ? 0 : 6 }}>
+        <ButtonRow>
+          <OptionBtn active={subMode === 'group'} onClick={() => setSubMode('group')}>{t`By Group`}</OptionBtn>
+          <OptionBtn active={subMode === 'track'} onClick={() => setSubMode('track')}>{t`By Track`}</OptionBtn>
+        </ButtonRow>
       </div>
       {subMode === 'group' ? (
         <SettingsDropdown
           value={group ?? ''}
           onChange={(v) => setGroup(v || null)}
-          options={[{ value: '', label: '— choose a group —' }, ...CHORD_FOLLOW_GROUPS.map(g => ({ value: g, label: groupLabel(g) }))]}
+          options={[{ value: '', label: t`— choose a group —` }, ...CHORD_FOLLOW_GROUPS.map(g => ({ value: g, label: groupLabel(g) }))]}
         />
       ) : tracks.length === 0 ? (
-        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-inactive)', fontFamily: 'var(--font-ui)', fontStyle: 'italic' }}>No file open</div>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-inactive)', fontFamily: 'var(--font-ui)', fontStyle: 'italic' }}>{t`No file open`}</div>
       ) : (
         <SettingsDropdown
           value={trackIndex === null ? '' : String(trackIndex)}
           onChange={(v) => setTrackIndex(v === '' ? null : Number(v))}
-          options={[{ value: '', label: '— choose a track —' }, ...tracks.map(tr => ({ value: String(tr.index), label: tr.trackName }))]}
+          options={[{ value: '', label: t`— choose a track —` }, ...tracks.map(tr => ({ value: String(tr.index), label: tr.trackName }))]}
         />
       )}
+      </div>
     </>
   )
 }
@@ -143,10 +202,10 @@ function ChordReadingControl() {
   const mode = useStore(s => s.chordReadingMode)
   const setMode = useStore(s => s.setChordReadingMode)
   return (
-    <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+    <ButtonRow>
       <OptionBtn active={mode === 'safe'} onClick={() => setMode('safe')}>{t`Safe`}</OptionBtn>
       <OptionBtn active={mode === 'progressive'} onClick={() => setMode('progressive')}>{t`Progressive`}</OptionBtn>
-    </div>
+    </ButtonRow>
   )
 }
 function ChordReadingExtra() {
@@ -163,10 +222,10 @@ function ChordNamingControl() {
   const style = useStore(s => s.chordNamingStyle)
   const setStyle = useStore(s => s.setChordNamingStyle)
   return (
-    <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
-      <OptionBtn active={style === 'abbreviation'} onClick={() => setStyle('abbreviation')}>Abbreviations</OptionBtn>
-      <OptionBtn active={style === 'symbol'} onClick={() => setStyle('symbol')}>Symbols</OptionBtn>
-    </div>
+    <ButtonRow>
+      <OptionBtn active={style === 'abbreviation'} onClick={() => setStyle('abbreviation')}>{t`Abbreviations`}</OptionBtn>
+      <OptionBtn active={style === 'symbol'} onClick={() => setStyle('symbol')}>{t`Symbols`}</OptionBtn>
+    </ButtonRow>
   )
 }
 function ChordNamingExtra() {
@@ -175,7 +234,8 @@ function ChordNamingExtra() {
 }
 
 export const NOTATION_DEFS: SettingDef[] = [
-  { id: 'displaySystem', icon: Languages, kind: 'choice', Control: DisplaySystemControl, Glance: DisplaySystemGlance },
+  { id: 'displaySystem', icon: Languages, kind: 'choice', Control: DisplaySystemControl, Glance: DisplaySystemGlance, NameRight: HideNamesToggle,
+    Extra: () => useStore(s => s.noteNaming) === 'sargam' ? <SargamExtra /> : null },
   { id: 'accidentals', icon: Hash, kind: 'choice', Control: AccidentalsControl, Glance: AccidentalsGlance,
     useVisible: () => useStore(s => s.noteNaming) !== 'hidden' },
   { id: 'chordTracking', icon: Radar, kind: 'choice', Control: ChordTrackingControl, Glance: ChordTrackingGlance, Extra: ChordTrackingExtra },

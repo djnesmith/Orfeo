@@ -2,8 +2,10 @@ import { buildFileGrid } from './beatGridBuild'
 import { Midi } from '@tonejs/midi'
 import type { ParsedMidi, ParsedTrack, ParsedNote } from '../types'
 import { getGMName, getGMGroup } from './gmInstruments'
+import { n } from '../i18n/mark'
 import { restoreHandTagsFromHints } from './handMetadata'
-import { assignHands } from './handAssignment'
+import { assignHandsByTrack } from './handAssignment'
+import { stavePairsOf } from './trackChordRole'
 import { useStore } from '../store'
 import { HAND_ASSIGN_GROUPS } from './keyboardGroups'
 import { SEMITONE_TO_KEY_NAME } from './keyDetection'
@@ -59,6 +61,8 @@ export function parseMidiBuffer(buffer: ArrayBuffer, fileName: string, filePath 
   } catch {}
 
   const tracks: ParsedTrack[] = []
+  // each parsed track's name as written in the file ('' when none), for hand pairing
+  const fileTrackNames = new Map<number, string>()
   let pianoFamilyIndex = 0
 
   // ── A channel's mix belongs to the channel, not to one track: MIDI files often
@@ -93,7 +97,7 @@ export function parseMidiBuffer(buffer: ArrayBuffer, fileName: string, filePath 
     if (track.notes.length === 0) return
     const isDrum = track.channel === 9
     const program = isDrum ? -1 : (track.instrument?.number ?? 0)
-    const gmName = isDrum ? 'Standard Drum Kit' : getGMName(program)
+    const gmName = isDrum ? n('Standard Drum Kit') : getGMName(program)
     const group = getGMGroup(program, isDrum)
     // HAND_ASSIGN_GROUPS (piano+organ), not the broader KEYBOARD_GROUPS —
     // a chromatic-percussion track (vibraphone etc, see keyboardGroups.ts)
@@ -155,6 +159,7 @@ export function parseMidiBuffer(buffer: ArrayBuffer, fileName: string, filePath 
       expressionEvents: channelEvents(11),
     }
 
+    fileTrackNames.set(parsedTrack.index, track.name ?? '')
     tracks.push(parsedTrack)
   })
 
@@ -205,17 +210,20 @@ export function parseMidiBuffer(buffer: ArrayBuffer, fileName: string, filePath 
   }
 
   // ── Restore Orfeo persisted roll-visibility / keyboard-lit flags ────────────
-  // Format: ORFEO_TRACK_VISIBLE:N:0/1 and ORFEO_TRACK_KEYBOARD:N:0/1 — same
+  // Format: ORFEO_TRACK_VISIBLE:N:0/1, ORFEO_TRACK_KEYBOARD:N:0/1 and
+  // ORFEO_TRACK_MUTED:N:0/1 — same
   // convention as ORFEO_TRACK_NAME/COLOR. Only the Playback Editor's Save
   // writes these; the TrackPanel's per-track icons are session-only and never
   // touch the file (see MidiEditor.tsx / electron/main.ts editor:save).
   const orfeoTrackVisible: Record<number, boolean> = {}
   const orfeoTrackKeyboard: Record<number, boolean> = {}
+  const orfeoTrackMuted: Record<number, boolean> = {}
   for (const meta of (midi.header as any).meta ?? []) {
     if (typeof meta.text !== 'string') continue
     for (const [prefix, target] of [
       ['ORFEO_TRACK_VISIBLE:', orfeoTrackVisible],
       ['ORFEO_TRACK_KEYBOARD:', orfeoTrackKeyboard],
+      ['ORFEO_TRACK_MUTED:', orfeoTrackMuted],
     ] as const) {
       if (!meta.text.startsWith(prefix)) continue
       const rest = meta.text.slice(prefix.length)
@@ -240,18 +248,23 @@ export function parseMidiBuffer(buffer: ArrayBuffer, fileName: string, filePath 
   // time this function returns, either restored above or freshly computed
   // here. This is what lets the keyboard's L/R indicator just read the tag
   // instead of inferring it live every frame (see handBoundaries.ts).
-  const kbNotesNeedingAssignment = tracks
-    .filter(t => HAND_ASSIGN_GROUPS.has(t.group) && !t.isDrum)
-    // group stamped per-note (mutates in place, keeps identity) so
-    // tryFastPath() can tell "two halves of one split piano" apart from
-    // "a piano track and an unrelated organ track" — see handAssignment.ts.
-    .flatMap(t => t.notes.map(n => Object.assign(n, { group: t.group })))
-    .filter(n => n.hand === undefined)
-  if (kbNotesNeedingAssignment.length > 0) {
+  // Instrument by instrument, never pooled: a piano's two staves give its
+  // hands directly, every other keyboard track (an organ, a chord-symbol
+  // track) gets its own. Pairing reads the names written in the file, not
+  // the display fallback or Orfeo's own renames.
+  const kbTracks = tracks.filter(t => HAND_ASSIGN_GROUPS.has(t.group) && !t.isDrum)
+  if (kbTracks.some(t => t.notes.some(n => n.hand === undefined))) {
     const { rhMaxFingers, lhMaxFingers } = useStore.getState()
-    const { assignments } = assignHands(kbNotesNeedingAssignment, { rhMaxFingers, lhMaxFingers })
+    const assignments = assignHandsByTrack(
+      kbTracks.map(t => ({ name: fileTrackNames.get(t.index) ?? '', channel: t.channel ?? -1, group: t.group, notes: t.notes })),
+      { rhMaxFingers, lhMaxFingers },
+      n => n.hand !== undefined,
+    )
     for (const a of assignments) { a.note.hand = a.hand; a.note.handConfidence = a.confidence }
   }
+  // The same staves, for the chord reading: a two-staff piano is one
+  // instrument there too (trackChordRole.ts)
+  const stavePairs = stavePairsOf(tracks.map(t => ({ ...t, name: fileTrackNames.get(t.index) ?? '', channel: t.channel ?? -1 })))
 
   const result: any = {
     fileName,
@@ -264,6 +277,7 @@ export function parseMidiBuffer(buffer: ArrayBuffer, fileName: string, filePath 
     _raw: buffer,
     _keySignature: keySignature,
     _filePath: filePath,
+    _stavePairs: stavePairs,
     _rawMidiTracks: midi.tracks,
     _tempoMap: tempoMap,
     _timeSigMap: timeSigMap,
@@ -274,6 +288,7 @@ export function parseMidiBuffer(buffer: ArrayBuffer, fileName: string, filePath 
     _orfeoTrackColors: Object.keys(orfeoTrackColors).length > 0 ? orfeoTrackColors : undefined,
     _orfeoTrackVisible: Object.keys(orfeoTrackVisible).length > 0 ? orfeoTrackVisible : undefined,
     _orfeoTrackKeyboard: Object.keys(orfeoTrackKeyboard).length > 0 ? orfeoTrackKeyboard : undefined,
+    _orfeoTrackMuted: Object.keys(orfeoTrackMuted).length > 0 ? orfeoTrackMuted : undefined,
     _handTagsRestored: handTagsRestored,
   }
 

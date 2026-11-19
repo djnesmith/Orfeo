@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import type { KeyRange } from '../utils/keyboardRange'
+import type { KeyLightSetup } from '../utils/keyLights'
 
 // ── MIDI keyboard settings + live device state ────────────────────────────────
 // Kept apart from the main store: everything here is about the player's own
@@ -33,6 +35,10 @@ export interface MidiPrefs {
   gmOutput: string                // '' = Orfeo's built-in General MIDI synth, else a MIDI output port name
   seenDevices: string[]           // keyboards that already got their first-connection Settings pop-up
   lastDevice: string              // last keyboard actually played
+  keyRanges: Record<string, KeyRange> // device key -> its lowest and highest key, as the player pressed them
+  rangeAsked: string[]            // keyboards already asked for their range (measured or skipped)
+  keyLights: Record<string, KeyLightSetup> // device key -> how its key lights are driven (missing = utils/keyLights defaultSetup)
+  keyLightsEnabled: boolean       // Settings › MIDI Keyboard › Key lights: off = no keyboard is lit, whatever its setup
 }
 
 export const MIDI_DEFAULTS: MidiPrefs = {
@@ -56,13 +62,23 @@ export const MIDI_DEFAULTS: MidiPrefs = {
   gmOutput: '',
   seenDevices: [],
   lastDevice: '',
+  keyRanges: {},
+  rangeAsked: [],
+  keyLights: {},
+  keyLightsEnabled: false,
 }
+
+// The keyboard-range pop-up: which keyboard it's asking about. `test` (Dev
+// Tools) takes keys from anywhere and saves nothing; a simulated keyboard
+// (`sim`) is remembered for this session only, never in the prefs.
+export interface RangePrompt { key: string; name: string; test?: boolean; sim?: boolean }
 
 export interface MidiDeviceInfo {
   key: string             // cleaned model name — one entry per physical keyboard
   name: string            // what the user sees (maker + model)
   connected: boolean
   portIds: string[]
+  virtual?: boolean       // a software port between apps (loopMIDI…), not a keyboard: listed in dev mode only
 }
 
 export interface MidiOutputInfo { port: string; name: string }
@@ -80,6 +96,10 @@ interface MidiLive {
   // Native engine: exclusive (Low latency) vs shared with other apps. Not saved:
   // off by default, on while a keyboard is connected (useNativeEngine.ts)
   nativeExclusive: boolean
+  rangePrompt: RangePrompt | null
+  simRanges: Record<string, KeyRange>  // simulated keyboards: session only, never saved
+  simRangeAsked: string[]
+  simKeyLights: Record<string, KeyLightSetup>  // simulated keyboards: session only, never saved
 }
 
 type MidiState = MidiPrefs & MidiLive & {
@@ -99,10 +119,22 @@ export const useMidiSettings = create<MidiState>((set) => ({
   sustainDown: false,
   diagVersion: 0,
   nativeExclusive: false,
+  rangePrompt: null,
+  simRanges: {},
+  simRangeAsked: [],
+  simKeyLights: {},
   set: (p) => set(p),
-  // Keeps which keyboards already had their first-connection pop-up
-  resetPrefs: () => set(s => ({ ...MIDI_DEFAULTS, seenDevices: s.seenDevices, lastDevice: s.lastDevice })),
+  // Keeps which keyboards already had their first-connection pop-up, and the
+  // ranges measured for them — those describe the keyboards, not a preference
+  resetPrefs: () => set(s => ({ ...MIDI_DEFAULTS, seenDevices: s.seenDevices, lastDevice: s.lastDevice, keyRanges: s.keyRanges, rangeAsked: s.rangeAsked, keyLights: s.keyLights })),
 }))
+
+// Same rule as utils/keyboardRange isKeyRange, kept here so this store loads nothing else
+const validRange = (r: any): r is KeyRange =>
+  !!r && Number.isInteger(r.low) && Number.isInteger(r.high) && r.low >= 0 && r.high <= 127 && r.low < r.high
+
+const validLights = (l: any): l is KeyLightSetup =>
+  !!l && ['off', 'notes', 'partykeys', 'fingers', 'onesmart', 'vangoa'].includes(l.mode) && Number.isInteger(l.channel) && l.channel >= 1 && l.channel <= 16
 
 const PREF_KEYS = Object.keys(MIDI_DEFAULTS) as (keyof MidiPrefs)[]
 const pickPrefs = (s: MidiPrefs): MidiPrefs =>
@@ -118,7 +150,10 @@ export const midiPrefsReady: Promise<void> = (async () => {
       for (const k of PREF_KEYS) {
         const d = MIDI_DEFAULTS[k], v = saved[k]
         if (v === undefined || typeof v !== typeof d || Array.isArray(d) !== Array.isArray(v)) continue
-        ;(merged as any)[k] = k === 'controls' ? { ...MIDI_DEFAULTS.controls, ...v } : v
+        ;(merged as any)[k] = k === 'controls' ? { ...MIDI_DEFAULTS.controls, ...v }
+          : k === 'keyRanges' ? Object.fromEntries(Object.entries(v).filter(([, r]) => validRange(r)))
+          : k === 'keyLights' ? Object.fromEntries(Object.entries(v).filter(([, l]) => validLights(l)))
+          : v
       }
       useMidiSettings.setState(merged)
     }
