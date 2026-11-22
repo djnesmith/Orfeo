@@ -1,6 +1,6 @@
 # Orfeo on GitHub: downloads and traffic
 
-**Last updated: 21. 11. 2026 at 14:02** Ljubljana time (CET) · updates daily from 07:00
+**Last updated: 22. 11. 2026 at 13:52** Ljubljana time (CET) · updates daily from 07:00
 
 [djnesmith/Orfeo](https://github.com/djnesmith/Orfeo) · ★ 0 stars · 0 forks · 0 watching
 
@@ -42,13 +42,13 @@ Highlighted numbers are the ones closest to real people: downloads of the app an
 
 | Day | Windows installer | Windows portable | macOS | Linux | App starts | Page views | Unique visitors | Clones |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Sun 15 Nov | – | – | – | – | – | – | – | – |
 | Mon 16 Nov | – | – | – | – | – | – | – | – |
 | Tue 17 Nov | – | – | – | – | – | – | – | – |
 | Wed 18 Nov | – | – | – | – | – | – | – | – |
 | Thu 19 Nov | – | – | – | – | – | – | – | – |
 | Fri 20 Nov | – | – | – | – | – | – | – | – |
 | Sat 21 Nov | – | – | – | – | – | – | – | – |
+| Sun 22 Nov | – | – | – | – | – | – | – | – |
 
 Downloads per day start with the second day of tracking (they are the difference between two daily snapshots); views and clones go back 14 days before tracking started. Today's row is still growing.
 
