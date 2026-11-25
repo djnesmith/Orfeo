@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, Menu, utilityProcess, MessageChannelMain, type UtilityProcess } from 'electron'
 import { autoUpdater } from 'electron-updater'
-import { join, basename, dirname, extname } from 'path'
+import { join, basename, dirname, extname, resolve } from 'path'
 import { execFile } from 'child_process'
 import { readFileSync, writeFileSync, existsSync, readdirSync, createWriteStream, statSync } from 'fs'
 import { readPrefsFile, writePrefsFile } from './prefsFile'
@@ -16,7 +16,7 @@ import { scanMidiFolder, listFolderNames } from './libraryScan'
 import { fileFromArgs } from './openWith'
 import { fileHasLyrics } from '../src/utils/lyricsCheck'
 import { KEYBOARD_GROUPS } from '../src/utils/keyboardGroups'
-import { nextOrfeoVersion, stripOrfeoSuffix } from '../src/utils/orfeoVersioning'
+import { nextOrfeoVersion, stripOrfeoSuffix, isOrfeoVersionBase } from '../src/utils/orfeoVersioning'
 import { downloadEnding, newerRelease } from '../src/utils/newRelease'
 import type { Hand } from '../src/types'
 import { t, applyLanguage, chooseStartup, defaultChoice } from '../src/utils/i18n'
@@ -40,8 +40,58 @@ const openDialog = (options: Electron.OpenDialogOptions) =>
   mainWin ? dialog.showOpenDialog(mainWin, options) : dialog.showOpenDialog(options)
 const saveDialog = (options: Electron.SaveDialogOptions) =>
   mainWin ? dialog.showSaveDialog(mainWin, options) : dialog.showSaveDialog(options)
+// ── Linux: Wayland with an NVIDIA card draws through XWayland (issue #18) ──
+// On some of these (Fedora 45, KDE Plasma, Wayland, NVIDIA's own driver) the
+// window drew once and then never again: the song played, the screen stayed
+// put, and the next start came up black. Running through XWayland (X11 inside
+// Wayland) draws normally. Only that combination is changed; starting Orfeo
+// with your own --ozone-platform=… (wayland to try native Wayland) wins.
+// Must be set before the app is ready.
+if (process.platform === 'linux') {
+  const wayland = process.env.XDG_SESSION_TYPE === 'wayland' || !!process.env.WAYLAND_DISPLAY
+  const nvidia = existsSync('/proc/driver/nvidia/version')
+  const chosen = app.commandLine.hasSwitch('ozone-platform') || process.argv.some(a => a.startsWith('--ozone-platform'))
+  if (wayland && nvidia && !chosen) app.commandLine.appendSwitch('ozone-platform', 'x11')
+}
+
 // ── Set by app:confirm-close so the renderer-triggered re-close passes through ──
 let allowClose = false
+// ── A close always gets through. The page answers at once (app:close-heard)
+// and may then ask about unsaved changes for as long as you need. Without an
+// answer Orfeo would stay running with no way to close it, and the next start
+// would only bring that dead window back (single-instance lock). A page that is
+// only busy can't answer either, and closing it could lose unsaved changes, so
+// after CLOSE_ANSWER_MS Orfeo asks (a system dialog, drawn even when the page
+// isn't): Wait, or Close Orfeo. An answer arriving meanwhile takes the question
+// away and the usual close goes on. A crashed page closes at once. ───────────
+const CLOSE_ANSWER_MS = 5000
+let closePending = false                     // asked the page, no answer yet
+let closeAnswerTimer: ReturnType<typeof setTimeout> | null = null
+let closeQuestion: AbortController | null = null
+let pageGone = false
+function closeRegardless(win: BrowserWindow) {
+  if (closeAnswerTimer) { clearTimeout(closeAnswerTimer); closeAnswerTimer = null }
+  allowClose = true
+  if (!win.isDestroyed()) win.destroy()
+}
+async function askToCloseRegardless(win: BrowserWindow) {
+  closeAnswerTimer = null
+  if (win.isDestroyed() || !closePending || closeQuestion) return
+  closeQuestion = new AbortController()
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'warning', noLink: true, defaultId: 0, cancelId: 0, signal: closeQuestion.signal,
+    buttons: [t`Wait`, t`Close Orfeo`],
+    message: t`Orfeo isn't responding`,
+    detail: t`It may still be busy and answer in a moment. If you close it now, changes you haven't saved are lost.`,
+  })
+  closeQuestion = null
+  if (response === 1 && closePending) closeRegardless(win)
+}
+ipcMain.on('app:close-heard', () => {
+  closePending = false
+  if (closeAnswerTimer) { clearTimeout(closeAnswerTimer); closeAnswerTimer = null }
+  closeQuestion?.abort()   // it answered after all: the usual close goes on
+})
 
 // ── Recursively copies MIDI/notation files from `srcDir` into `destDir`,
 // preserving subfolder structure (so e.g. public/demo/musicxml/ lands at
@@ -120,10 +170,25 @@ function nextAvailableOrfeoPath(orfeoDir: string, rawBase: string): string {
   return join(orfeoDir, `${strippedBase}_ORFEO_v${version}.mid`)
 }
 
+// ── Where a save lands (see isOrfeoVersionBase, src/utils/orfeoVersioning.ts):
+// a change to the music → the next free _ORFEO_vN; anything else → the same
+// edit file, when the song open is already one of Orfeo's versions. The
+// original is never overwritten. ────────────────────────────────────────────
+async function saveOutputPath(sourcePath: string, newVersion: boolean): Promise<string> {
+  const orfeoDir = await getOrfeoOutputDir(sourcePath)
+  const rawBase  = basename(sourcePath).replace(/\.midi?$/i, '')
+  const same = (a: string) => resolve(a).toLowerCase()   // either slash, any case (resolve also drops a trailing slash)
+  const inOrfeoDir = same(dirname(sourcePath)) === same(orfeoDir)
+  if (!newVersion && inOrfeoDir && isOrfeoVersionBase(rawBase)) return sourcePath
+  return nextAvailableOrfeoPath(orfeoDir, rawBase)
+}
+
 // ── Main window ────────────────────────────────────────────────────────────
 function createWindow() {
   const win = new BrowserWindow({
-    width: 1400, height: 900, minWidth: 900, minHeight: 600,
+    // smallest: the room a 1920 laptop at 150 % Windows scaling gives (1280 wide,
+    // about 690 tall above the taskbar); 900 × 600 was too small to use (22. 11.)
+    width: 1400, height: 900, minWidth: 1280, minHeight: 680,
     backgroundColor: '#111116',
     show: false,
     titleBarStyle: 'hidden',
@@ -142,15 +207,19 @@ function createWindow() {
   // Chromium's own accelerator handling sees them. ─────────────────────────
   win.webContents.setVisualZoomLevelLimits(1, 1)
   {
+    fitToWindow = loadPrefs().fitToWindow !== false
     const saved = loadPrefs().appZoom
     applyZoom(win, ZOOM_STEPS.includes(saved) ? saved : 100, false)
   }
   // ── Shrinking the window below what the current zoom needs is the same
-  // 900×600-floor violation the cap exists to prevent — re-clamp rather
+  // smallest-window-size violation the cap exists to prevent — re-clamp rather
   // than only checking at the moment of a zoom action. ────────────────────
   win.on('resize', () => {
     if (currentZoomPercent > maxAllowedZoomPercent(win)) applyZoom(win, currentZoomPercent)
+    else setFactor(win)   // the fit follows the window's size (FIT_DESIGN)
   })
+  // a page load starts at Chromium's own zoom for the page: set ours again
+  win.webContents.on('did-finish-load', () => { appliedFactor = 0; setFactor(win) })
   win.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
     // ── Developer tools (Ctrl+Shift+I or F12) — the user manual asks for
@@ -189,8 +258,14 @@ function createWindow() {
   win.on('close', (e) => {
     if (allowClose) return // set by app:confirm-close — let it through
     e.preventDefault()
-    win.webContents.send('app:save-before-close')
+    if (pageGone) { closeRegardless(win); return }   // nobody left to ask
+    // asked once is enough: a busy page gets it when it's free again
+    if (!closePending) { closePending = true; win.webContents.send('app:save-before-close') }
+    if (!closeAnswerTimer && !closeQuestion) closeAnswerTimer = setTimeout(() => askToCloseRegardless(win), CLOSE_ANSWER_MS)
   })
+  // a crashed page can't answer; a reloaded one can again
+  win.webContents.on('render-process-gone', () => { pageGone = true })
+  win.webContents.on('did-finish-load', () => { pageGone = false; closePending = false })
 }
 
 // ── Prefs ──────────────────────────────────────────────────────────────────
@@ -226,17 +301,57 @@ ipcMain.handle('prefs:set', async (_e, data) => savePrefs(data))
 const ZOOM_STEPS = [80, 90, 100, 110, 125, 150, 175, 200]
 let currentZoomPercent = 100
 
+// ── Fit to a small window — the whole app is laid out at FIT_DESIGN (in
+// CSS pixels) and scaled down to fill a smaller window, the way the Settings
+// window scales its cards: fonts, icons, bars, keyboard, everything in
+// proportion, down to the window's minimum size, instead of cutting off what
+// doesn't fit (a 1366-pixel laptop clipped the queue button and practice
+// mode's tempo arrows). A window at or above FIT_DESIGN draws at 1:1. The
+// player's own zoom (Ctrl +/−, Settings) multiplies on top and is what's
+// saved and shown; the fit is never saved. ─────────────────────────────────
+const FIT_DESIGN = { w: 1720, h: 720 }   // the width the top bar needs to show everything (its three thirds), measured 22. 11.
+// the window's own buttons (minimise, maximise, close) keep their size while
+// the app shrinks around them, so they're left out of what's scaled
+const CAPTION_BUTTONS_W = 150
+// Only as much as needed so nothing is cut off: about 76 % on a 1366 laptop,
+// 75 % at 1330 wide, about 72 % at the smallest window (1280 wide) — the user's
+// choice (22. 11.) over a 75 % floor that cut off the top bar's right end in
+// windows narrower than 1330. Settings › Appearance › Fit to small windows
+// switches the shrinking off (prefs fitToWindow, on by default).
+let fitToWindow = true
+function fitFactorFor(width: number, height: number): number {
+  if (!fitToWindow || width <= 0 || height <= 0) return 1
+  return Math.min(1, (width - CAPTION_BUTTONS_W) / (FIT_DESIGN.w - CAPTION_BUTTONS_W), height / FIT_DESIGN.h)
+}
+function fitFactor(win: BrowserWindow): number {
+  const [w, h] = win.getContentSize()
+  return fitFactorFor(w, h)
+}
+let appliedFactor = 0
+function setFactor(win: BrowserWindow) {
+  // a minimised window reports its size as 0 × 0: nothing to fit, and a zero or
+  // negative factor makes setZoomFactor throw (an error box from the main process)
+  if (win.isDestroyed() || win.isMinimized()) return
+  const [w, h] = win.getContentSize()
+  if (w <= 0 || h <= 0) return
+  const f = Math.max(0.25, (currentZoomPercent / 100) * fitFactor(win))
+  if (Math.abs(f - appliedFactor) < 0.0005) return
+  appliedFactor = f
+  win.webContents.setZoomFactor(f)
+}
+
 // ── Highest step whose logical viewport (window size ÷ zoom) still fits
 // the window's own documented minimum size — read live via
-// getMinimumSize() rather than duplicating the 900×600 from createWindow's
+// getMinimumSize() rather than duplicating the smallest size from createWindow's
 // BrowserWindow options, so the two can never drift apart. ────────────────
 function maxAllowedZoomPercent(win: BrowserWindow): number {
   const [minW, minH] = win.getMinimumSize()
   const { width, height } = win.getBounds()
   let max = ZOOM_STEPS[0]
   for (const step of ZOOM_STEPS) {
-    const logicalW = width  / (step / 100)
-    const logicalH = height / (step / 100)
+    const fit = fitFactorFor(width, height)
+    const logicalW = width  / (step / 100 * fit)
+    const logicalH = height / (step / 100 * fit)
     if (logicalW >= minW && logicalH >= minH) max = step
   }
   return max
@@ -247,7 +362,7 @@ function applyZoom(win: BrowserWindow, requestedPercent: number, persist = true)
   const percent = Math.min(requestedPercent, cap)
   const capped = percent < requestedPercent
   currentZoomPercent = percent
-  win.webContents.setZoomFactor(percent / 100)
+  setFactor(win)
   if (persist) savePrefs({ appZoom: percent })
   // Sent unconditionally, even when the value didn't actually change (e.g.
   // repeatedly hitting the cap) — the renderer's transient hint needs to
@@ -267,6 +382,10 @@ function stepZoom(win: BrowserWindow, direction: 1 | -1) {
 ipcMain.handle('zoom:get', async () => {
   if (!mainWin) return { percent: currentZoomPercent, steps: ZOOM_STEPS, max: 200 }
   return { percent: currentZoomPercent, steps: ZOOM_STEPS, max: maxAllowedZoomPercent(mainWin) }
+})
+ipcMain.handle('zoom:fit', async (_e, on: boolean) => {
+  fitToWindow = on !== false
+  if (mainWin) { appliedFactor = 0; setFactor(mainWin) }
 })
 ipcMain.handle('zoom:set', async (_e, percent: number) => {
   if (!mainWin) return null
@@ -960,14 +1079,19 @@ ipcMain.handle('editor:save', async (_e, payload: {
       }
     }
 
-    // ── Resolve output path into Orfeo/ subfolder — always the next _ORFEO_vN,
-    // never overwrites a prior save (see src/utils/orfeoVersioning.ts). ────────
-    const orfeoDir   = await getOrfeoOutputDir(payload.filePath)
-    const rawBase    = basename(payload.filePath).replace(/\.midi?$/i, '')
-    const outputPath = nextAvailableOrfeoPath(orfeoDir, rawBase)
-
     const noteTrackIndices: number[] = []
     midi.tracks.forEach((t, i) => { if (t.notes.length > 0) noteTrackIndices.push(i) })
+
+    // ── Where it lands (saveOutputPath): a track deleted, split or merged, or
+    // tempo / key saved with it, is a new version; instruments, colours,
+    // names, shown / lights / mute and the Mixer save into the same file. ────
+    const keptTracks = new Set(payload.includedTracks.map(it => it.index)).size
+    const changesMusic = keptTracks < noteTrackIndices.length
+      || payload.mergeGroups.length > 0
+      || payload.includedTracks.some(it => it.splitHand)
+      || (payload.bpmRatio !== undefined && payload.bpmRatio !== 1)
+      || !!payload.transposeSemitones
+    const outputPath = await saveOutputPath(payload.filePath, changesMusic)
 
     // Mixer values, written the same way mixer:save does, before any track moves
     for (const ch of payload.mixer ?? []) {
@@ -1275,9 +1399,8 @@ ipcMain.handle('mixer:save', async (_e, payload: {
       }),
     })
 
-    const orfeoDir   = await getOrfeoOutputDir(payload.filePath)
-    const rawBase    = basename(payload.filePath).replace(/\.midi?$/i, '')
-    const outputPath = nextAvailableOrfeoPath(orfeoDir, rawBase)
+    // the Mixer never changes the music: the same edit file (saveOutputPath)
+    const outputPath = await saveOutputPath(payload.filePath, false)
 
     const outBuf = Buffer.from(midi.toArray())
     writeFileSync(outputPath, outBuf)
@@ -1346,9 +1469,8 @@ ipcMain.handle('tempoKey:save', async (_e, payload: {
       text: historyMetaText({ type: 'tempoKey', timestamp: Date.now(), summary: payload.summary }),
     })
 
-    const orfeoDir   = await getOrfeoOutputDir(payload.filePath)
-    const rawBase    = basename(payload.filePath).replace(/\.midi?$/i, '')
-    const outputPath = nextAvailableOrfeoPath(orfeoDir, rawBase)
+    // tempo or key saved into the song: a new version (saveOutputPath)
+    const outputPath = await saveOutputPath(payload.filePath, true)
 
     const outBuf = Buffer.from(midi.toArray())
     writeFileSync(outputPath, outBuf)
@@ -1858,12 +1980,11 @@ ipcMain.handle('transcript:generate', async (_e, midiFilePath: string, noteNamin
 // mixer:save (no save-location dialog — a dialog whose defaultPath folder
 // doesn't exist yet can fall back to wherever the OS last had one open,
 // e.g. Downloads, silently writing the file to the wrong place). ────────────
-ipcMain.handle('noteEditor:save', async (_e, payload: { filePath: string; base64: string; summary?: string }) => {
+ipcMain.handle('noteEditor:save', async (_e, payload: { filePath: string; base64: string; summary?: string; newVersion?: boolean }) => {
   try {
     if (!payload.filePath) return { ok: false, message: t`No source file loaded` }
-    const orfeoDir   = await getOrfeoOutputDir(payload.filePath)
-    const rawBase    = basename(payload.filePath).replace(/\.midi?$/i, '')
-    const outputPath = nextAvailableOrfeoPath(orfeoDir, rawBase)
+    // notes changed: a new version; only hands assigned or confirmed: the same file
+    const outputPath = await saveOutputPath(payload.filePath, payload.newVersion !== false)
 
     // Renderer already serialized the edit buffer to bytes — parse it back
     // just to append the ORFEO_HISTORY meta-event, same convention as every

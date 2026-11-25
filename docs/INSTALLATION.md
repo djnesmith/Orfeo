@@ -45,7 +45,9 @@ keep your data.*
 - `Orfeo-Setup-1.7.0.exe`
 - `Orfeo-1.7.0-portable.exe`
 
-Both are on the [Releases](https://github.com/Squarebow/Orfeo/releases) page.
+Both are on the [Releases](https://github.com/Squarebow/Orfeo/releases) page. From v1.8.1 the
+page also lists `Orfeo-Update-<version>.exe`: the same installer, for copies of Orfeo that update
+themselves. You don't need to download it.
 
 </details>
 
@@ -71,7 +73,8 @@ downloaded for the Samples engine.
 > folder** (Settings → MIDI Files & Library):
 >
 > - `<name>_ORFEO_v1.mid`, `_ORFEO_v2.mid`, … — versioned saves from the
->   Playback Editor, Note Editor, Mixer, and tempo/key changes
+>   Playback Editor, Note Editor, Mixer, and tempo/key changes (a new version
+>   when the music changes; other changes save into the same copy)
 > - `<name>_ORFEO_IMPORTED.mid` — MusicXML / Guitar Pro / Capella / KAR files
 >   converted on import
 >

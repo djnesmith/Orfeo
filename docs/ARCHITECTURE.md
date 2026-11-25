@@ -476,7 +476,13 @@ because unknown text meta events are preserved by every conformant MIDI parser.
 </details>
 
 Edited files are saved as **`<name>_ORFEO_v{N}.mid`** (first edit is `v1`) inside
-the library folder's `Orfeo/` subfolder — the original is never modified.
+the library folder's `Orfeo/` subfolder — the original is never modified. A
+change to the music makes the next version: a track deleted, split or merged;
+notes added, deleted, moved, repitched, resized or made louder or softer; tempo
+or key saved into the song. Anything else (instruments, colours, names, shown /
+lights / mute, the Mixer, which hand plays a note) saves into the same
+`_ORFEO_vN` copy. One place decides: `saveOutputPath` in `electron/main.ts`,
+with the rule in `src/utils/orfeoVersioning.ts`.
 
 ---
 
@@ -699,10 +705,15 @@ visibility are saved on the way in and restored on the way out; loading a
 song clears Focus.
 
 **What shows: one rule** (`isShown`, `src/utils/trackShown.ts`): eye on, not
-muted, and the soloed track when one is soloed. The piano roll, the keys lit
+muted, and the soloed track when one is soloed. The piano roll alone asks
+`isOnRoll`: the same rule, unless **Muted tracks stay on the roll** (Settings ›
+Playback, `mutedOnRoll`, off by default) is on — then mute only silences a
+track and its notes stay on the roll. `trackShown.ts` keeps its own copy of
+that setting (`syncMutedOnRoll`, set by the store's setter) for the drawing
+loop. Everywhere else — the keys lit
 during playback in all three engines (plus `showOnKeyboard`), Reflect on
-keyboard and Step Through (`src/utils/stepThrough.ts`) all use it, so they
-always agree. What sounds is mute and solo only — the eye never affects it, so
+keyboard and Step Through (`src/utils/stepThrough.ts`) — uses `isShown`, so a
+muted track never lights keys or lands a step. What sounds is mute and solo only — the eye never affects it, so
 a hidden track plays along as accompaniment without showing anywhere. Mute and
 solo never switch the eye itself (`setTrackMuted`, `muteGroup` only set
 `muted`); Focus is the one feature that sets both on purpose, and its hidden

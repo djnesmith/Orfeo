@@ -16,7 +16,7 @@ import type { Hand } from '../../types'
 import { HAND_LH_CSS, HAND_RH_CSS } from '../../utils/handColors'
 import { HitEffectsRenderer } from './HitEffects'
 import { drainHitEffects } from '../../utils/hitEffectQueue'
-import { isShown } from '../../utils/trackShown'
+import { isOnRoll } from '../../utils/trackShown'
 import { t } from '../../utils/i18n'
 
 const VISIBLE_SECONDS  = 6
@@ -270,7 +270,8 @@ function LoopOverlay() {
     // Right-click anywhere over the overlay clears the loop region
     const onContextMenu = (e: MouseEvent) => {
       const el = overlayRef.current
-      if (!el) return
+      // in the Note Editor, right-click belongs to the notes (Assign to Left Hand…)
+      if (!el || useStore.getState().noteEditorActive) return
       const rect = el.getBoundingClientRect()
       if (e.clientX >= rect.left && e.clientX <= rect.right &&
           e.clientY >= rect.top  && e.clientY <= rect.bottom) {
@@ -327,15 +328,25 @@ function LoopOverlay() {
   const showTooltip = !!midi && !noteEditorActive && hasSelection && mousePos !== null && useStore.getState().tooltipsEnabled
 
   // Edit mode disables loop overlay pointer events to pass them to PixiJS.
-  // While checking hands passage by passage, the passage's loop still shows,
-  // display only, so the notes underneath stay editable.
+  // While checking hands passage by passage, the passage's loop still shows
+  // and the notes inside stay editable; only its two edges take the mouse,
+  // so a passage that is wrong for longer than Orfeo marked can be widened
+  // (or narrowed) by dragging, as in playback.
   if (noteEditorActive) {
     if (!checkingHands || !hasSelection || heightPct <= 0) return null
+    const edge = (which: 'start' | 'end', pct: number) => (
+      <div
+        onMouseDown={e => { e.preventDefault(); e.stopPropagation(); draggingRef.current = which }}
+        style={handleWrap(pct)}
+      >
+        <div style={{ width: '100%', height: 2, background: amber }} />
+      </div>
+    )
     return (
-      <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>
+      <div ref={overlayRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>
         <div style={{ position: 'absolute', left: 0, right: 0, top: `${topPct}%`, height: `${heightPct}%`, background: amberFill }} />
-        <div style={{ position: 'absolute', left: 0, right: 0, top: `${topPct}%`, height: 2, background: amber }} />
-        <div style={{ position: 'absolute', left: 0, right: 0, top: `calc(${botPct}% - 2px)`, height: 2, background: amber }} />
+        {edge('end', topPct)}
+        {edge('start', botPct)}
       </div>
     )
   }
@@ -468,6 +479,7 @@ export default function PianoRoll() {
       s.midi !== prev.midi ||
       s.currentTime !== prev.currentTime ||
       s.tracks !== prev.tracks ||
+      s.mutedOnRoll !== prev.mutedOnRoll ||
       s.detectedKey !== prev.detectedKey ||
       s.zoomLevel !== prev.zoomLevel ||
       s.appTheme !== prev.appTheme ||
@@ -652,7 +664,7 @@ export default function PianoRoll() {
           const track    = nonEmptyEditTracks[i]
           const parsedIdx = parsedMidi?.tracks?.[i]?.index ?? i
           const ts = trackMap.get(parsedIdx)
-          if (!ts || !isShown(ts, hasSolo)) continue   // same gate as drawFrame (trackShown.ts)
+          if (!ts || !isOnRoll(ts, hasSolo)) continue   // same gate as drawFrame (trackShown.ts)
           const color = parseInt((ts.color ?? '#e8a027').replace('#', ''), 16)
 
           for (const note of track.notes) {
@@ -1025,7 +1037,7 @@ export default function PianoRoll() {
           if (note.time + note.duration < visStart) continue
 
           const ts = trackMap.get(note.trackIndex)
-          if (ts && !isShown(ts, hasSolo)) continue   // what shows: eye, mute and solo (trackShown.ts)
+          if (ts && !isOnRoll(ts, hasSolo)) continue   // what's on the roll: eye, mute and solo — mute kept on with Muted tracks stay on the roll (trackShown.ts)
 
           let shownMidi = note.midi + transpose
           let folded = false

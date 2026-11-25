@@ -26,9 +26,9 @@ export type SettingId =
   | 'noteEditor' | 'unsavedWarning' | 'saveTrackChanges' | 'tapTempo' | 'tempoWarnings' | 'countIn' | 'skipEmptyBars' | 'handAssignment' | 'loopRegion' | 'focusMode'
   | 'stepThrough' | 'chordPrompter' | 'closePanels' | 'handTags' | 'trackVu'
   | 'displaySystem' | 'accidentals' | 'chordTracking' | 'chordReading' | 'chordNaming'
-  | 'keyRange' | 'portableKeyboards' | 'showOctaves' | 'showNoteNames' | 'reflectPianoRoll' | 'preciseScrubTime' | 'explorerPause' | 'tempoDisplay'
+  | 'keyRange' | 'portableKeyboards' | 'showOctaves' | 'showNoteNames' | 'reflectPianoRoll' | 'preciseScrubTime' | 'explorerPause' | 'mutedOnRoll' | 'tempoDisplay'
   | 'rollZoom' | 'barNumbers' | 'playbar' | 'visualEffects'
-  | 'theme' | 'handColors' | 'appZoom' | 'tooltips' | 'tours' | 'supportNote' | 'starmap'
+  | 'theme' | 'handColors' | 'appZoom' | 'fitToWindow' | 'tooltips' | 'tours' | 'supportNote' | 'starmap'
   | 'showLanguageSwitcher' | 'followSystemLanguage' | 'menuLanguages' | 'translations' | 'translationUpdates'
   | 'midiKeyboards' | 'midiReconnect' | 'liveResponse' | 'latencyOffset' | 'gmOutput' | 'touchResponse' | 'duplicateFilter'
   | 'pedalsControls' | 'delayCheck' | 'midiTools'
@@ -55,7 +55,7 @@ export const GROUPS: GroupInfo[] = [
   { id: 'midi-files-library', name: t`MIDI Files & Library`, intro: t`Organise your library`, manualUrl: 'https://orfeo.cc/docs/managing-midi-files',
     stack: [['tags', 'practiceQueue', 'openWith', 'showDemo', 'chordTranscription', 'showLyrics']] },
   { id: 'playback-editing', name: t`Playback`, intro: t`Shape playback`, manualUrl: 'https://orfeo.cc/docs/playing-midi-files',
-    stack: [['countIn', 'skipEmptyBars', 'tempoDisplay', 'focusMode', 'loopRegion', 'tapTempo', 'preciseScrubTime', 'explorerPause', 'tempoWarnings']] },
+    stack: [['countIn', 'skipEmptyBars', 'tempoDisplay', 'focusMode', 'mutedOnRoll', 'loopRegion', 'tapTempo', 'preciseScrubTime', 'explorerPause', 'tempoWarnings']] },
   { id: 'practice', name: t`Practice`, intro: t`Tools for practising`, manualUrl: 'https://orfeo.cc/docs/practicing-with-midi-files' },
   { id: 'editing', name: t`Editing`, intro: t`Edit your songs`, manualUrl: 'https://orfeo.cc/docs/editing-midi-files',
     stack: [['handAssignment'], ['saveTrackChanges'], ['noteEditor'], ['trackVu', 'unsavedWarning']], looseFirst: true },
@@ -64,7 +64,7 @@ export const GROUPS: GroupInfo[] = [
   { id: 'piano-roll', name: t`Piano Roll`, intro: t`Tune the falling notes`, manualUrl: 'https://orfeo.cc/docs/playing-midi-files/the-piano-roll',
     stack: [['visualEffects'], ['rollZoom'], ['barNumbers', 'playbar']], looseFirst: true },
   { id: 'appearance', name: t`Appearance`, intro: t`Change the look`, manualUrl: 'https://orfeo.cc/docs/settings/appearance-settings',
-    stack: [['handColors', 'tooltips', 'tours', 'appZoom', 'theme']] },
+    stack: [['handColors', 'tooltips', 'tours', 'appZoom', 'fitToWindow', 'theme']] },
   { id: 'language', name: t`Language`, intro: t`Choose your language`, manualUrl: 'https://orfeo.cc/docs/settings/language',
     stack: [['showLanguageSwitcher', 'followSystemLanguage', 'menuLanguages', 'translations', 'translationUpdates']] },
   // Dev mode only (simAvailable) — its words are plain strings, kept out of the translations
@@ -190,8 +190,11 @@ with octave buttons to move them. Notes beyond their edges show fainter on the k
   { id: 'explorerPause', group: 'playback-editing', name: t`Explorers pause playback`, summary: t`Opening the Chords or Scales Explorer pauses the song.`,
     description: t`Opening the Chords Explorer or the Scales Explorer pauses the song, so it doesn't play over the chords you try.\nTurn it off to keep the song playing while you explore.`,
     keywords: 'pause playback explorer chords scales stop song' },
+  { id: 'mutedOnRoll', group: 'playback-editing', name: t`Muted tracks stay on the roll`, summary: t`Mute silences a track but keeps its notes on the piano roll.`,
+    description: t`Turn on to keep a muted track's notes on the piano roll.\nOnly the roll changes: the keyboard, step-through and the Mixer still leave muted tracks out.`,
+    keywords: 'mute muted hide eye track piano roll visible silence notes keep stay' },
   { id: 'tempoDisplay', group: 'playback-editing', name: t`Tempo display`, summary: t`Show the tempo in BPM or as a speed in percent.`,
-    description: t`The tempo at the top shows beats per minute, or the speed against the song's own tempo: 100 % plays it as written, 50 % at half speed.\nThe arrows and typing a value work the same way in both.`,
+    description: t`The tempo at the top shows beats per minute, or the speed against the song's own tempo: 100 % plays it as written, 50 % at half speed.\nThe arrows and typing a value work the same way in both. Right-clicking the tempo switches it too.`,
     keywords: 'tempo bpm speed percent percentage slow down faster display readout' },
   // ── Piano Roll
   { id: 'rollZoom', group: 'piano-roll', name: t`Zoom`, summary: t`How much of the song the piano roll shows at once.`,
@@ -216,6 +219,9 @@ with octave buttons to move them. Notes beyond their edges show fainter on the k
   { id: 'appZoom', group: 'appearance', name: t`App Zoom`, summary: t`Make everything in Orfeo bigger or smaller.`,
     description: t`Makes everything in Orfeo bigger or smaller. Ctrl + / Ctrl − / Ctrl 0 work exactly as in a web browser. Click reset to go back to 100%.`,
     keywords: 'zoom scale size bigger smaller ctrl' },
+  { id: 'fitToWindow', group: 'appearance', name: t`Fit to small windows`, summary: t`Everything shrinks to fit a small window.`,
+    description: t`Turn on to shrink everything in Orfeo just enough to fit a small window.\nOff, a small window shows everything at full size and cuts off what doesn't fit.`,
+    keywords: 'fit window small screen laptop shrink scale size zoom resize' },
   { id: 'tooltips', group: 'appearance', name: t`Tooltips`, summary: t`Hints that pop up when you point at a control.`,
     description: t`The hints that pop up when you point at a button, knob or icon. Turn them off once you know your way around.\nA knob still shows its value while you turn it.`,
     keywords: 'tooltips hints help hover popup tips' },
