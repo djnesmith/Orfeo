@@ -1,6 +1,6 @@
 # Orfeo on GitHub: downloads and traffic
 
-**Last updated: 25. 11. 2026 at 15:59** Ljubljana time (CET) · updates daily from 07:00
+**Last updated: 26. 11. 2026 at 15:29** Ljubljana time (CET) · updates daily from 07:00
 
 [djnesmith/Orfeo](https://github.com/djnesmith/Orfeo) · ★ 0 stars · 0 forks · 0 watching
 
@@ -15,40 +15,43 @@
 | — Windows portable (`Orfeo-x.y.z-portable.exe`) | 251 | 0 |
 | — macOS (`.dmg`, `.zip`) | 0 | 0 |
 | — Linux (`.AppImage`, `.deb`, `.rpm`) | 0 | 0 |
+| Installed copies updating in the app (`Orfeo-Update-x.y.z.exe`, from v1.8.1) | 0 | 0 |
 | App starts checking for updates (`latest.yml`) | 1 010 | 0 |
 | Updates installed (`.blockmap`) | 175 | 0 |
 
 *Downloads* count each time a release file was downloaded. *App starts* count installed copies (Windows installer version) checking GitHub for a newer version when Orfeo starts, so they show the app being used, not just downloaded. The Windows portable, macOS and Linux versions do not check automatically.
 
+*Updating in the app*: from v1.8.1 an installed copy downloads its update from its own copy of the installer, `Orfeo-Update-x.y.z.exe`, so the Windows installer column counts only people downloading it from GitHub. Up to v1.8.0 the two can't be told apart: there the Windows installer column also includes copies updating themselves (shown as – under Updated in the app).
+
 Highlighted numbers are the ones closest to real people: downloads of the app and unique visitors. Page views and clones also count repeat visits, search-engine crawlers and automated tools.
 
 ## Downloads per release
 
-| Release | Published | Windows installer | Windows portable | macOS | Linux | Total downloads | App starts | Updates |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| [v1.6.0](https://github.com/djnesmith/Orfeo/releases/tag/v1.6.0) | 2026-10-31 | 128 | 73 | 0 | 0 | <mark>**201**</mark> | 132 | 17 |
-| [v1.5.4](https://github.com/djnesmith/Orfeo/releases/tag/v1.5.4) | 2026-10-25 | 326 | 76 | 0 | 0 | <mark>**402**</mark> | 407 | 50 |
-| [v1.5.3](https://github.com/djnesmith/Orfeo/releases/tag/v1.5.3) | 2026-10-23 | 117 | 23 | 0 | 0 | <mark>**140**</mark> | 112 | 29 |
-| [v1.5.2](https://github.com/djnesmith/Orfeo/releases/tag/v1.5.2) | 2026-10-22 | 40 | 5 | 0 | 0 | <mark>**45**</mark> | 34 | 16 |
-| [v1.5.1](https://github.com/djnesmith/Orfeo/releases/tag/v1.5.1) | 2026-10-22 | 35 | 6 | 0 | 0 | <mark>**41**</mark> | 17 | 7 |
-| [v1.5.0](https://github.com/djnesmith/Orfeo/releases/tag/v1.5.0) | 2026-10-22 | 7 | 3 | 0 | 0 | <mark>**10**</mark> | 8 | 3 |
-| [v1.4.4](https://github.com/djnesmith/Orfeo/releases/tag/v1.4.4) | 2026-10-15 | 147 | 35 | 0 | 0 | <mark>**182**</mark> | 220 | 35 |
-| [v1.4.3](https://github.com/djnesmith/Orfeo/releases/tag/v1.4.3) | 2026-10-15 | 7 | 1 | 0 | 0 | <mark>**8**</mark> | 9 | 5 |
-| [v1.4.2](https://github.com/djnesmith/Orfeo/releases/tag/v1.4.2) | 2026-10-15 | 5 | 3 | 0 | 0 | <mark>**8**</mark> | 2 | 1 |
-| [v1.4.1](https://github.com/djnesmith/Orfeo/releases/tag/v1.4.1) | 2026-10-11 | 63 | 26 | 0 | 0 | <mark>**89**</mark> | 69 | 12 |
-| **All releases** | | **875** | **251** | **0** | **0** | <mark>**1 126**</mark> | **1 010** | **175** |
+| Release | Published | Windows installer | Updated in the app | Windows portable | macOS | Linux | Total downloads | App starts | Updates |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| [v1.6.0](https://github.com/djnesmith/Orfeo/releases/tag/v1.6.0) | 2026-10-31 | 128 | – | 73 | 0 | 0 | <mark>**201**</mark> | 132 | 17 |
+| [v1.5.4](https://github.com/djnesmith/Orfeo/releases/tag/v1.5.4) | 2026-10-25 | 326 | – | 76 | 0 | 0 | <mark>**402**</mark> | 407 | 50 |
+| [v1.5.3](https://github.com/djnesmith/Orfeo/releases/tag/v1.5.3) | 2026-10-23 | 117 | – | 23 | 0 | 0 | <mark>**140**</mark> | 112 | 29 |
+| [v1.5.2](https://github.com/djnesmith/Orfeo/releases/tag/v1.5.2) | 2026-10-22 | 40 | – | 5 | 0 | 0 | <mark>**45**</mark> | 34 | 16 |
+| [v1.5.1](https://github.com/djnesmith/Orfeo/releases/tag/v1.5.1) | 2026-10-22 | 35 | – | 6 | 0 | 0 | <mark>**41**</mark> | 17 | 7 |
+| [v1.5.0](https://github.com/djnesmith/Orfeo/releases/tag/v1.5.0) | 2026-10-22 | 7 | – | 3 | 0 | 0 | <mark>**10**</mark> | 8 | 3 |
+| [v1.4.4](https://github.com/djnesmith/Orfeo/releases/tag/v1.4.4) | 2026-10-15 | 147 | – | 35 | 0 | 0 | <mark>**182**</mark> | 220 | 35 |
+| [v1.4.3](https://github.com/djnesmith/Orfeo/releases/tag/v1.4.3) | 2026-10-15 | 7 | – | 1 | 0 | 0 | <mark>**8**</mark> | 9 | 5 |
+| [v1.4.2](https://github.com/djnesmith/Orfeo/releases/tag/v1.4.2) | 2026-10-15 | 5 | – | 3 | 0 | 0 | <mark>**8**</mark> | 2 | 1 |
+| [v1.4.1](https://github.com/djnesmith/Orfeo/releases/tag/v1.4.1) | 2026-10-11 | 63 | – | 26 | 0 | 0 | <mark>**89**</mark> | 69 | 12 |
+| **All releases** | | **875** | **0** | **251** | **0** | **0** | <mark>**1 126**</mark> | **1 010** | **175** |
 
 ## Last 7 days, day by day
 
 | Day | Windows installer | Windows portable | macOS | Linux | App starts | Page views | Unique visitors | Clones |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Thu 19 Nov | – | – | – | – | – | – | – | – |
 | Fri 20 Nov | – | – | – | – | – | – | – | – |
 | Sat 21 Nov | – | – | – | – | – | – | – | – |
 | Sun 22 Nov | – | – | – | – | – | – | – | – |
 | Mon 23 Nov | – | – | – | – | – | – | – | – |
 | Tue 24 Nov | – | – | – | – | – | – | – | – |
 | Wed 25 Nov | – | – | – | – | – | – | – | – |
+| Thu 26 Nov | – | – | – | – | – | – | – | – |
 
 Downloads per day start with the second day of tracking (they are the difference between two daily snapshots); views and clones go back 14 days before tracking started. Today's row is still growing.
 
