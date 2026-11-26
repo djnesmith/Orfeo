@@ -10,9 +10,11 @@ Typecheck: `npm run typecheck`. Tests: `npm test`. Build a Release Mac app (Appl
 
 ```sh
 npm ci
-npm run dist:mac -- --publish never   # release/mac-arm64/ and release/mac/ (Intel), plus dmg and zip; --arm64 is ignored
-ditto release/mac-arm64/Orfeo.app /Applications/Orfeo.app
+npm run dist:mac -- --publish never -c.directories.output=release/orfeo.noindex   # mac-arm64/ and mac/ (Intel), plus dmg and zip; --arm64 is ignored
+ditto release/orfeo.noindex/mac-arm64/Orfeo.app /Applications/Orfeo.app
 ```
+
+The output goes in a folder ending in `.noindex`, which Spotlight skips, so the dev build doesn't show in Spotlight or Alfred next to the installed app (David, 2026-11-10). `release/` is already in `.gitignore`. Plain `npm run dist:mac` still writes to `release/`, where Spotlight finds it.
 
 ## Features
 
